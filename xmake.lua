@@ -8,6 +8,10 @@ set_languages("c++23")
 option("dev", {default = true})
 option("test", {default = true})
 
+if has_config("test") then
+    add_requires("boost_ut")
+end
+
 if has_config("dev") then
     -- Don't fetch system package
     set_policy("package.install_only", true)
@@ -42,4 +46,12 @@ for _, filepath in ipairs(os.files("demo/*.cc")) do
         set_kind("binary")
         add_files(filepath)
         add_deps("lib")
+end
+
+if has_config("test") then
+    target("tnfa_test")
+        set_kind("binary")
+        add_files("test/*.cc")
+        add_deps("lib")
+        add_packages("boost_ut")
 end
