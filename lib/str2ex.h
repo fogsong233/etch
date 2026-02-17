@@ -1,8 +1,10 @@
 #pragma once
 
 #include "regex.h"
+#include "ty.h"
 #include "util.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <limits>
@@ -10,6 +12,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace etch {
 
@@ -71,8 +74,30 @@ consteval auto toCharFn(ResolverResult value) -> CharFn {
     }
 }
 
-struct NodeCountResult {
+consteval auto makeSingleCharRange(char ch) -> CharRange {
+    CharRange range;
+    range.set(static_cast<unsigned char>(ch));
+    return range;
+}
+
+consteval auto makeCharRangeFromFn(CharFn fn) -> CharRange {
+    CharRange range;
+    if(fn == nullptr) {
+        return range;
+    }
+    for(int i = 0; i < 256; ++i) {
+        const char ch = static_cast<char>(i);
+        if(fn(ch)) {
+            range.set(static_cast<std::size_t>(i));
+        }
+    }
+    return range;
+}
+
+struct CountResult {
     std::size_t nodeCount = 0;
+    std::size_t splitRangeCount = 0;
+    std::size_t maxOwnRange = 0;
     regex::RegexParseError error = regex::RegexParseError::none;
     std::size_t errorPos = 0;
 
@@ -87,14 +112,22 @@ struct NoopResolver {
     }
 };
 
-template <FixedString Pattern, bool Counting, typename NameResolver, std::size_t MaxNodes = 0>
+template <FixedString Pattern, bool Counting, typename NameResolver, class RegexTree = void>
 class ConstexprRegexParser {
     constexpr static std::size_t kPatternSize = Pattern.size();
-    constexpr static std::size_t kTreeNodes = MaxNodes == 0 ? 1 : MaxNodes;
     constexpr static std::size_t kMaxNameLen = kPatternSize == 0 ? 1 : kPatternSize;
+    constexpr static std::size_t kCharAlphabetSize = 256;
 
 public:
-    using ParseResult = std::conditional_t<Counting, NodeCountResult, regex::RegexTree<kTreeNodes>>;
+    struct RangeTag {
+        std::size_t ownerIdx;
+        CharTy charSymbol;
+        bool left;
+    };
+
+    using ParseResult = std::conditional_t<Counting, CountResult, RegexTree>;
+
+    std::vector<RangeTag> rangeTags_{};
 
     consteval explicit ConstexprRegexParser(NameResolver resolver) :
         resolver_(std::move(resolver)) {}
@@ -112,6 +145,7 @@ public:
                 setError(regex::RegexParseError::unexpected_end);
             }
         }
+        splitCharRange();
         return result_;
     }
 
@@ -121,7 +155,174 @@ private:
     std::size_t pos_ = 0;
     bool hasError_ = false;
 
+    consteval void splitCharRange() {
+        if(rangeTags_.empty()) {
+            if constexpr(Counting) {
+                result_.splitRangeCount = 0;
+                result_.maxOwnRange = 0;
+            } else {
+                result_.splitRangeIdx = 0;
+            }
+            return;
+        }
+
+        std::size_t ownerCount = 0;
+        if constexpr(Counting) {
+            ownerCount = result_.nodeCount;
+        } else {
+            ownerCount = static_cast<std::size_t>(result_.size);
+        }
+
+        if(ownerCount == 0) {
+            if constexpr(Counting) {
+                result_.splitRangeCount = 0;
+                result_.maxOwnRange = 0;
+            } else {
+                result_.splitRangeIdx = 0;
+            }
+            return;
+        }
+
+        if constexpr(Counting) {
+            result_.splitRangeCount = 0;
+            result_.maxOwnRange = 0;
+        } else {
+            result_.splitRangeIdx = 0;
+            for(std::size_t i = 0; i < static_cast<std::size_t>(result_.size); ++i) {
+                result_.nodes[i].charSupportIdx = 0;
+            }
+        }
+
+        std::vector<RangeTag> sortedTags = rangeTags_;
+        std::ranges::sort(sortedTags, [](const RangeTag& lhs, const RangeTag& rhs) {
+            if(lhs.charSymbol != rhs.charSymbol) {
+                return lhs.charSymbol < rhs.charSymbol;
+            }
+            if(lhs.left != rhs.left) {
+                return lhs.left && !rhs.left;
+            }
+            return lhs.ownerIdx < rhs.ownerIdx;
+        });
+
+        std::vector<std::size_t> ownRangeCount{};
+        ownRangeCount.resize(ownerCount, 0);
+
+        constexpr auto kInactivePos = std::numeric_limits<std::size_t>::max();
+        std::vector<std::size_t> activeOwners{};
+        activeOwners.reserve(ownerCount);
+        std::vector<std::size_t> activePos{};
+        activePos.resize(ownerCount, kInactivePos);
+
+        const auto setUnexpectedToken = [&]() consteval -> bool {
+            setError(regex::RegexParseError::unexpected_token);
+            return false;
+        };
+
+        const auto emitRange = [&](int left, int right) consteval -> bool {
+            if(left > right || activeOwners.empty()) {
+                return true;
+            }
+
+            if constexpr(Counting) {
+                result_.splitRangeCount += 1;
+                for(const auto ownerIdx: activeOwners) {
+                    ownRangeCount[ownerIdx] += 1;
+                }
+                return true;
+            } else {
+                if(result_.splitRangeIdx >= result_.splitRanges.size()) {
+                    setError(regex::RegexParseError::too_many_nodes);
+                    return false;
+                }
+                const auto splitIdx = result_.splitRangeIdx++;
+                result_.splitRanges[splitIdx] =
+                    CharPair{static_cast<CharTy>(left), static_cast<CharTy>(right)};
+
+                for(const auto ownerIdx: activeOwners) {
+                    auto& node = result_.nodes[ownerIdx];
+                    if(node.charSupportIdx >= node.charSupport.size()) {
+                        setError(regex::RegexParseError::too_many_nodes);
+                        return false;
+                    }
+                    node.charSupport[node.charSupportIdx++] = static_cast<CharTy>(splitIdx);
+                }
+                return true;
+            }
+        };
+
+        const auto applyTag = [&](const RangeTag& tag) consteval -> bool {
+            const auto ownerIdx = tag.ownerIdx;
+
+            if(tag.left) {
+                if(activePos[ownerIdx] != kInactivePos) {
+                    return setUnexpectedToken();
+                }
+                activePos[ownerIdx] = activeOwners.size();
+                activeOwners.push_back(ownerIdx);
+                return true;
+            }
+
+            if(activePos[ownerIdx] == kInactivePos) {
+                return setUnexpectedToken();
+            }
+            const auto pos = activePos[ownerIdx];
+            const auto lastOwner = activeOwners.back();
+            activeOwners[pos] = lastOwner;
+            activePos[lastOwner] = pos;
+            activeOwners.pop_back();
+            activePos[ownerIdx] = kInactivePos;
+            return true;
+        };
+
+        if(!applyTag(sortedTags.front())) {
+            return;
+        }
+
+        for(std::size_t i = 1; i < sortedTags.size(); ++i) {
+            const auto& pre = sortedTags[i - 1];
+            const auto& cur = sortedTags[i];
+
+            int left = 0;
+            int right = -1;
+            if(pre.left && cur.left) {
+                left = static_cast<int>(pre.charSymbol);
+                right = static_cast<int>(cur.charSymbol) - 1;
+            } else if(pre.left && !cur.left) {
+                left = static_cast<int>(pre.charSymbol);
+                right = static_cast<int>(cur.charSymbol);
+            } else if(!pre.left && cur.left) {
+                left = static_cast<int>(pre.charSymbol) + 1;
+                right = static_cast<int>(cur.charSymbol) - 1;
+            } else {
+                left = static_cast<int>(pre.charSymbol) + 1;
+                right = static_cast<int>(cur.charSymbol);
+            }
+            if(!emitRange(left, right)) {
+                return;
+            }
+
+            if(!applyTag(cur)) {
+                return;
+            }
+        }
+
+        if(!activeOwners.empty()) {
+            setError(regex::RegexParseError::unexpected_token);
+            return;
+        }
+
+        if constexpr(Counting) {
+            result_.maxOwnRange = 0;
+            for(const auto rangeCount: ownRangeCount) {
+                if(rangeCount > result_.maxOwnRange) {
+                    result_.maxOwnRange = rangeCount;
+                }
+            }
+        }
+    }
+
     [[nodiscard]] consteval bool eof() const {
+
         return pos_ >= kPatternSize;
     }
 
@@ -156,13 +357,32 @@ private:
             (void)kind;
             return idx;
         } else {
-            if(result_.size >= kTreeNodes) {
+            if(result_.size >= result_.nodes.size()) {
                 setError(regex::RegexParseError::too_many_nodes);
                 return -1;
             }
-            const int idx = static_cast<int>(result_.size++);
-            result_.nodes[static_cast<std::size_t>(idx)].kind = kind;
-            return idx;
+            result_.nodes[result_.size].kind = kind;
+            return static_cast<int>(result_.size++);
+        }
+    }
+
+    consteval void addRangeTag(const CharRange& charRange, std::size_t ownerIdx) {
+        std::size_t pos = 0;
+        while(pos < kCharAlphabetSize) {
+            while(pos < kCharAlphabetSize && !charRange[pos]) {
+                ++pos;
+            }
+            if(pos >= kCharAlphabetSize) {
+                break;
+            }
+            const auto left = pos;
+            while(pos + 1 < kCharAlphabetSize && charRange[pos + 1]) {
+                ++pos;
+            }
+            const auto right = static_cast<CharTy>(pos);
+            rangeTags_.push_back(RangeTag{ownerIdx, static_cast<CharTy>(left), true});
+            rangeTags_.push_back(RangeTag{ownerIdx, right, false});
+            ++pos;
         }
     }
 
@@ -170,24 +390,23 @@ private:
         return newNode(regex::RegexTreeNodeKind::empty);
     }
 
-    consteval auto makeLiteralNode(char ch) -> int {
-        const int idx = newNode(regex::RegexTreeNodeKind::literal);
-        if constexpr(!Counting) {
-            if(idx >= 0) {
-                result_.nodes[static_cast<std::size_t>(idx)].literal = ch;
-            }
+    consteval auto makeCharRangeNode(const CharRange& charRange) -> int {
+        const int idx = newNode(regex::RegexTreeNodeKind::char_range);
+        if(idx >= 0) {
+            addRangeTag(charRange, static_cast<std::size_t>(idx));
         }
         return idx;
     }
 
+    consteval auto makeLiteralNode(char ch) -> int {
+        return makeCharRangeNode(makeSingleCharRange(ch));
+    }
+
     consteval auto makeCharCheckNode(CharFn fn) -> int {
-        const int idx = newNode(regex::RegexTreeNodeKind::char_check);
-        if constexpr(!Counting) {
-            if(idx >= 0) {
-                result_.nodes[static_cast<std::size_t>(idx)].checkFn = fn;
-            }
+        if(fn == nullptr) {
+            return makeCharRangeNode(makeCharRangeFromFn(CharHelper::isAnyChar));
         }
-        return idx;
+        return makeCharRangeNode(makeCharRangeFromFn(fn));
     }
 
     consteval auto makeTagNode(TagTy tag) -> int {
@@ -482,8 +701,11 @@ consteval auto parseToRegexTree(NameResolver resolver) {
     using Counter = detail::ConstexprRegexParser<Pattern, true, detail::NoopResolver>;
     constexpr auto count = Counter(detail::NoopResolver{}).parse();
     constexpr std::size_t exactNodes = count.ok() ? count.nodeCount : 1;
-    using Parser =
-        detail::ConstexprRegexParser<Pattern, false, std::decay_t<NameResolver>, exactNodes>;
+    using Parser = detail::ConstexprRegexParser<
+        Pattern,
+        false,
+        std::decay_t<NameResolver>,
+        regex::RegexTree<exactNodes, count.splitRangeCount, count.maxOwnRange>>;
     Parser parser(std::move(resolver));
     auto tree = parser.parse();
     if constexpr(!count.ok()) {

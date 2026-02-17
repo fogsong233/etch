@@ -1,8 +1,8 @@
 #pragma once
 #include "printer.h"
 #include "regex.h"
+#include "ty.h"
 #include <cstddef>
-#include <cstdint>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -56,15 +56,23 @@ struct Regex2PrintNode : public regex::RecursiveRegexVisitor {
         return true;
     }
 
-    bool visitLiteral(int nodeIdx, char literal) final {
-        const auto idx = newPrintNode(std::string("literal '") + literal + "'");
-        addChild(parent, idx);
-        return true;
-    }
-
-    bool visitCharCheck(int nodeIdx, CharFn checkFn) final {
-        const auto idx =
-            newPrintNode("char check@" + std::to_string(reinterpret_cast<std::uintptr_t>(checkFn)));
+    bool visitCharRange(int nodeIdx) final {
+        std::string content = "char ranges: [";
+        const auto& node = tree.nodes[static_cast<std::size_t>(nodeIdx)];
+        for(std::size_t i = 0; i < node.charSupportIdx; ++i) {
+            const auto splitIdx = static_cast<std::size_t>(node.charSupport[i]);
+            if(splitIdx >= tree.splitRangeIdx) {
+                continue;
+            }
+            const auto range = tree.splitRanges[splitIdx];
+            if(!content.empty() && content.back() != '[') {
+                content += ", ";
+            }
+            content += std::to_string(range.first) + "('" + static_cast<char>(range.first) + "')-" +
+                       std::to_string(range.second) + "('" + static_cast<char>(range.second) + "')";
+        }
+        content += "]";
+        const auto idx = newPrintNode(content);
         addChild(parent, idx);
         return true;
     }

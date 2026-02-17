@@ -38,8 +38,7 @@ struct Tag : Regex {};
 
 enum class RegexTreeNodeKind {
     empty,
-    literal,
-    char_check,
+    char_range,
     tag,
     concat,
     alternation,
@@ -75,8 +74,10 @@ const inline char* RegexParseErrorToString(RegexParseError error) {
     }
 }
 
-template <std::size_t MaxNodes>
+template <std::size_t MaxNodes, std::size_t SplitRangeCnt, std::size_t MaxOwnRange>
 struct RegexTree {
+    using CharRangeRef = std::array<CharTy, MaxOwnRange>;
+
     struct Node {
         RegexTreeNodeKind kind = RegexTreeNodeKind::empty;
         int left = -1;
@@ -84,11 +85,13 @@ struct RegexTree {
         int minRepeat = 1;
         int maxRepeat = 1;  // neg means no upper bound.
         TagTy tag = tag_epsilon;
-        char literal = '\0';
-        CharFn checkFn = nullptr;
+        CharRangeRef charSupport;
+        std::size_t charSupportIdx = 0;
     };
 
     std::array<Node, MaxNodes> nodes{};
+    std::array<CharPair, SplitRangeCnt> splitRanges{};
+    std::size_t splitRangeIdx = 0;
     int root = -1;
     std::size_t size = 0;
     RegexParseError error = RegexParseError::none;
@@ -102,8 +105,8 @@ struct RegexTree {
 struct RecursiveRegexVisitor {
     virtual constexpr ~RecursiveRegexVisitor() = default;
 
-    template <std::size_t MaxNodes>
-    constexpr void traverse(const RegexTree<MaxNodes>& tree, int nodeIdx = -1) {
+    template <class Tree>
+    constexpr void traverse(const Tree& tree, int nodeIdx = -1) {
         int current = nodeIdx;
         if(current < 0 || static_cast<std::size_t>(current) >= tree.size) {
             current = tree.root;
@@ -116,8 +119,7 @@ struct RecursiveRegexVisitor {
         const auto& node = tree.nodes[static_cast<std::size_t>(current)];
         switch(node.kind) {
             case RegexTreeNodeKind::empty: (void)visitEmpty(current); break;
-            case RegexTreeNodeKind::literal: (void)visitLiteral(current, node.literal); break;
-            case RegexTreeNodeKind::char_check: (void)visitCharCheck(current, node.checkFn); break;
+            case RegexTreeNodeKind::char_range: (void)visitCharRange(current); break;
             case RegexTreeNodeKind::tag: (void)visitTag(current, node.tag); break;
             case RegexTreeNodeKind::concat:
                 if(visitConcat(current, node.left, node.right)) {
@@ -158,11 +160,7 @@ protected:
         return true;
     }
 
-    virtual constexpr bool visitLiteral(int nodeIdx, char literal) {
-        return true;
-    }
-
-    virtual constexpr bool visitCharCheck(int nodeIdx, CharFn checkFn) {
+    virtual constexpr bool visitCharRange(int nodeIdx) {
         return true;
     }
 

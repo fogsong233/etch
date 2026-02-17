@@ -39,35 +39,30 @@
 
 #include "regex.h"
 #include "str2ex.h"
+#include "tnfa.h"
 #include "ty.h"
-#include <array>
-struct A {
-  int x;
-  consteval A(int x) : x(x) {}
-  consteval auto run() -> int {
-    x = x + 1;
-    return x;
-  }
-};
-#include <algorithm>
-#include <array>
-#include <vector>
+#include <cassert>
 
-struct T : public etch::regex::RecursiveRegexVisitor {
-  int t = 0;
-  constexpr bool visitCharCheck(int nodeIdx, etch::CharFn checkFn) override {
-    t += 1;
-    return true;
-  }
-};
+using namespace etch;
 
-int main(int argc, const char **argv) {
-  constexpr auto p = [] {
-    auto regex1 = etch::parseToRegexTree<R"(aaa\d{0,}\d)">();
-    T a{};
-    a.traverse(regex1);
-    return a.t;
-  }();
-  std::array<int, p> u{};
-  return 0;
+template <FixedString Pattern>
+constexpr auto kTree = parseToRegexTree<Pattern>();
+
+template <FixedString Pattern>
+consteval auto buildModel() {
+    static_assert(kTree<Pattern>.ok(), "failed to parse regex pattern");
+    constexpr auto model = TNFA::fromRegexTreeAuto<kTree<Pattern>>();
+    static_assert(model.has_value(), "compile-time TNFA build failed");
+    return *model;
+}
+
+template <typename Model>
+auto runSimulation(const Model& model, std::string_view input) -> std::optional<std::vector<int>> {
+    return TNFA::simulation(model, input);
+}
+
+int main(int argc, const char** argv) {
+    constexpr auto model = buildModel<R"(\w+/\w+(|\.cc))">();
+    auto res = runSimulation(model, "etach/regex.pcc").value();
+    return 0;
 }

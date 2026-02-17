@@ -7,10 +7,10 @@
 #include "regex.h"
 #include "ty.h"
 #include "util.h"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <limits>
 #include <optional>
 #include <string_view>
 #include <type_traits>
@@ -26,17 +26,16 @@ struct RuntimeConfiguration {
     std::vector<int> offsets{};
 };
 
-template <unsigned StateN, unsigned MaxConn>
+template <unsigned StateN,
+          unsigned MaxCharStep,
+          unsigned MaxEpsilonStep,
+          unsigned MaxSplitRange,
+          unsigned MaxOwnSplit>
 struct Transition {
     struct CharStep {
         StateTy another = 0;
-
-        union {
-            CharFn charFn = nullptr;
-            char literal;
-        };
-
-        bool isLiteral = false;
+        std::array<CharTy, MaxOwnSplit> charSupportRef{};
+        std::size_t charSupportRefIdx = 0;
         bool isEnabled = false;
     };
 
@@ -48,36 +47,32 @@ struct Transition {
     };
 
     struct Steps {
-        std::array<CharStep, MaxConn> charSteps{};
-        std::array<EpsilonStep, MaxConn> epsilonSteps{};
+        std::array<CharStep, MaxCharStep> charSteps{};
+        std::array<EpsilonStep, MaxEpsilonStep> epsilonSteps{};
     };
 
     std::array<Steps, StateN> toMap{};
     std::array<Steps, StateN> fromMap{};
 
-private:
-    constexpr static bool addCharStep(Steps& steps, StateTy another, CharFn charFn) {
-        for(auto& edge: steps.charSteps) {
-            if(edge.isEnabled) {
-                continue;
-            }
-            edge.another = another;
-            edge.charFn = charFn;
-            edge.isLiteral = false;
-            edge.isEnabled = true;
-            return true;
-        }
-        return false;
-    }
+    std::array<CharPair, MaxSplitRange> splitRanges{};
+    std::size_t splitRangeIdx = 0;
 
-    constexpr static bool addLiteralStep(Steps& steps, StateTy another, char literal) {
+private:
+    constexpr static bool addCharStep(Steps& steps,
+                                      StateTy another,
+                                      const std::array<CharTy, MaxOwnSplit>& charSupportRef,
+                                      std::size_t charSupportRefIdx) {
+        if(charSupportRefIdx > MaxOwnSplit) {
+            return false;
+        }
+
         for(auto& edge: steps.charSteps) {
             if(edge.isEnabled) {
                 continue;
             }
             edge.another = another;
-            edge.literal = literal;
-            edge.isLiteral = true;
+            edge.charSupportRef = charSupportRef;
+            edge.charSupportRefIdx = charSupportRefIdx;
             edge.isEnabled = true;
             return true;
         }
@@ -85,12 +80,12 @@ private:
     }
 
     constexpr static void sortEpsilonSteps(Steps& steps) {
-        // Keep enabled epsilon transitions in ascending priority order.
-        if constexpr(MaxConn < 2) {
+        if constexpr(MaxEpsilonStep < 2) {
             return;
         }
-        for(unsigned i = 0; i + 1 < MaxConn; ++i) {
-            for(unsigned j = 0; j + 1 < MaxConn - i; ++j) {
+
+        for(unsigned i = 0; i + 1 < MaxEpsilonStep; ++i) {
+            for(unsigned j = 0; j + 1 < MaxEpsilonStep - i; ++j) {
                 const auto left = steps.epsilonSteps[j];
                 const auto right = steps.epsilonSteps[j + 1];
                 const bool shouldSwap =
@@ -121,27 +116,29 @@ private:
     }
 
 public:
-    constexpr bool addTransition(StateTy from, StateTy to, CharFn charFn) {
-        if(from >= StateN || to >= StateN || charFn == nullptr) {
+    template <std::size_t N>
+    constexpr bool setSplitRanges(const std::array<CharPair, N>& ranges, std::size_t count) {
+        if(count > N || count > MaxSplitRange) {
             return false;
         }
-        if(!addCharStep(toMap[from], to, charFn)) {
-            return false;
+        splitRangeIdx = count;
+        for(std::size_t i = 0; i < count; ++i) {
+            splitRanges[i] = ranges[i];
         }
-        // Reverse index is best-effort and not used by simulation.
-        (void)addCharStep(fromMap[to], from, charFn);
         return true;
     }
 
-    constexpr bool addLiteralTransition(StateTy from, StateTy to, char literal) {
+    constexpr bool addTransition(StateTy from,
+                                 StateTy to,
+                                 const std::array<CharTy, MaxOwnSplit>& charSupportRef,
+                                 std::size_t charSupportRefIdx) {
         if(from >= StateN || to >= StateN) {
             return false;
         }
-        if(!addLiteralStep(toMap[from], to, literal)) {
+        if(!addCharStep(toMap[from], to, charSupportRef, charSupportRefIdx)) {
             return false;
         }
-        // Reverse index is best-effort and not used by simulation.
-        (void)addLiteralStep(fromMap[to], from, literal);
+        (void)addCharStep(fromMap[to], from, charSupportRef, charSupportRefIdx);
         return true;
     }
 
@@ -153,7 +150,6 @@ public:
         if(!addEpsilonStep(toMap[from], to, tag, priority)) {
             return false;
         }
-        // Reverse index is best-effort and not used by simulation.
         (void)addEpsilonStep(fromMap[to], from, tag, priority);
         return true;
     }
@@ -168,11 +164,15 @@ public:
     }
 };
 
-template <unsigned StateN, unsigned MaxConn>
+template <unsigned StateN,
+          unsigned MaxCharStep,
+          unsigned MaxConn,
+          unsigned MaxSplitRange,
+          unsigned MaxOwnSplit>
 struct TNFAModel {
     StateTy initialState{};
     StateTy finalState{};
-    Transition<StateN, MaxConn> transition{};
+    Transition<StateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit> transition{};
 };
 
 inline void applyTagUpdate(std::vector<int>& offsets, TagTy tag, int position, int unsetValue) {
@@ -193,9 +193,14 @@ inline void applyTagUpdate(std::vector<int>& offsets, TagTy tag, int position, i
     }
 }
 
-template <unsigned StateN, unsigned MaxConn>
-[[nodiscard]] constexpr bool hasSymbolTransition(const Transition<StateN, MaxConn>& transition,
-                                                 StateTy state) {
+template <unsigned StateN,
+          unsigned MaxCharStep,
+          unsigned MaxConn,
+          unsigned MaxSplitRange,
+          unsigned MaxOwnSplit>
+[[nodiscard]] constexpr bool hasSymbolTransition(
+    const Transition<StateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit>& transition,
+    StateTy state) {
     if(state >= StateN) {
         return false;
     }
@@ -208,8 +213,13 @@ template <unsigned StateN, unsigned MaxConn>
     return false;
 }
 
-template <unsigned StateN, unsigned MaxConn>
-[[nodiscard]] constexpr std::size_t countTags(const Transition<StateN, MaxConn>& transition) {
+template <unsigned StateN,
+          unsigned MaxCharStep,
+          unsigned MaxConn,
+          unsigned MaxSplitRange,
+          unsigned MaxOwnSplit>
+[[nodiscard]] constexpr std::size_t countTags(
+    const Transition<StateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit>& transition) {
     std::size_t maxTag = 0;
     for(const auto& steps: transition.toMap) {
         for(const auto& edge: steps.epsilonSteps) {
@@ -225,12 +235,19 @@ template <unsigned StateN, unsigned MaxConn>
     return maxTag;
 }
 
-template <unsigned StateN, unsigned MaxConn>
-[[nodiscard]] auto stepOnSymbol(const std::vector<RuntimeConfiguration>& configs,
-                                const Transition<StateN, MaxConn>& transition,
-                                char symbol) -> std::vector<RuntimeConfiguration> {
+template <unsigned StateN,
+          unsigned MaxCharStep,
+          unsigned MaxConn,
+          unsigned MaxSplitRange,
+          unsigned MaxOwnSplit>
+[[nodiscard]] auto stepOnSymbol(
+    const std::vector<RuntimeConfiguration>& configs,
+    const Transition<StateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit>& transition,
+    char symbol) -> std::vector<RuntimeConfiguration> {
     std::vector<RuntimeConfiguration> next;
     next.reserve(configs.size());
+
+    const auto symbolIdx = static_cast<CharTy>(static_cast<unsigned char>(symbol));
 
     for(const auto& cfg: configs) {
         if(cfg.state >= StateN) {
@@ -241,21 +258,23 @@ template <unsigned StateN, unsigned MaxConn>
             if(!edge.isEnabled) {
                 continue;
             }
+
             bool matched = false;
-            if(edge.isLiteral) {
-                matched = (edge.literal == symbol);
-            } else {
-                if(edge.charFn == nullptr) {
+            for(std::size_t i = 0; i < edge.charSupportRefIdx; ++i) {
+                const auto splitIdx = static_cast<std::size_t>(edge.charSupportRef[i]);
+                if(splitIdx >= transition.splitRangeIdx) {
                     continue;
                 }
-                matched = edge.charFn(symbol);
+                const auto range = transition.splitRanges[splitIdx];
+                if(symbolIdx >= range.first && symbolIdx <= range.second) {
+                    matched = true;
+                    break;
+                }
             }
             if(!matched) {
                 continue;
             }
 
-            // we found a valid transition, create a new configuration for the next
-            // step.
             auto moved = cfg;
             moved.state = edge.another;
             next.push_back(std::move(moved));
@@ -265,13 +284,17 @@ template <unsigned StateN, unsigned MaxConn>
     return next;
 }
 
-template <unsigned StateN, unsigned MaxConn>
-[[nodiscard]] auto epsilonClosure(const std::vector<RuntimeConfiguration>& configs,
-                                  const Transition<StateN, MaxConn>& transition,
-                                  StateTy finalState,
-                                  int position,
-                                  int unsetValue = offset_unset)
-    -> std::vector<RuntimeConfiguration> {
+template <unsigned StateN,
+          unsigned MaxCharStep,
+          unsigned MaxConn,
+          unsigned MaxSplitRange,
+          unsigned MaxOwnSplit>
+[[nodiscard]] auto epsilonClosure(
+    const std::vector<RuntimeConfiguration>& configs,
+    const Transition<StateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit>& transition,
+    StateTy finalState,
+    int position,
+    int unsetValue = offset_unset) -> std::vector<RuntimeConfiguration> {
     std::vector<RuntimeConfiguration> stack;
     stack.reserve(configs.size() + StateN);
 
@@ -295,7 +318,6 @@ template <unsigned StateN, unsigned MaxConn>
         closure.push_back(current);
 
         const auto& epsilonSteps = transition.toMap[current.state].epsilonSteps;
-        // Reverse push so lower priority value is popped first from the LIFO stack.
         for(unsigned i = MaxConn; i > 0; --i) {
             const auto& edge = epsilonSteps[i - 1];
             if(!edge.isEnabled) {
@@ -306,7 +328,6 @@ template <unsigned StateN, unsigned MaxConn>
             next.state = edge.another;
             applyTagUpdate(next.offsets, edge.tag, position, unsetValue);
             if(next.state < StateN && !visited[next.state]) {
-                // Always pop the higher priority epsilon transition first.
                 stack.push_back(std::move(next));
             }
         }
@@ -323,13 +344,18 @@ template <unsigned StateN, unsigned MaxConn>
     return filtered;
 }
 
-template <unsigned StateN, unsigned MaxConn>
-[[nodiscard]] auto simulation(const Transition<StateN, MaxConn>& transition,
-                              StateTy initialState,
-                              StateTy finalState,
-                              std::string_view input,
-                              std::size_t tagCount = 0,
-                              int unsetValue = offset_unset) -> std::optional<std::vector<int>> {
+template <unsigned StateN,
+          unsigned MaxCharStep,
+          unsigned MaxConn,
+          unsigned MaxSplitRange,
+          unsigned MaxOwnSplit>
+[[nodiscard]] auto simulation(
+    const Transition<StateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit>& transition,
+    StateTy initialState,
+    StateTy finalState,
+    std::string_view input,
+    std::size_t tagCount = 0,
+    int unsetValue = offset_unset) -> std::optional<std::vector<int>> {
     if(initialState >= StateN || finalState >= StateN) {
         return std::nullopt;
     }
@@ -363,11 +389,16 @@ template <unsigned StateN, unsigned MaxConn>
     return std::nullopt;
 }
 
-template <unsigned StateN, unsigned MaxConn>
-[[nodiscard]] auto simulation(const TNFAModel<StateN, MaxConn>& model,
-                              std::string_view input,
-                              std::size_t tagCount = 0,
-                              int unsetValue = offset_unset) -> std::optional<std::vector<int>> {
+template <unsigned StateN,
+          unsigned MaxCharStep,
+          unsigned MaxConn,
+          unsigned MaxSplitRange,
+          unsigned MaxOwnSplit>
+[[nodiscard]] auto
+    simulation(const TNFAModel<StateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit>& model,
+               std::string_view input,
+               std::size_t tagCount = 0,
+               int unsetValue = offset_unset) -> std::optional<std::vector<int>> {
     return simulation(model.transition,
                       model.initialState,
                       model.finalState,
@@ -376,13 +407,22 @@ template <unsigned StateN, unsigned MaxConn>
                       unsetValue);
 }
 
-template <class Tree, bool estimate, unsigned stateN = 0, unsigned MaxConn = 0, unsigned TagN = 1>
+template <class Tree,
+          bool estimate,
+          unsigned stateN = 0,
+          unsigned MaxCharStep = 0,
+          unsigned MaxConn = 0,
+          unsigned MaxSplitRange = 0,
+          unsigned MaxOwnSplit = 0,
+          unsigned TagN = 1>
 struct TNFABuilder : regex::RecursiveRegexVisitor {
-    static_assert(estimate || (stateN > 0 && MaxConn > 0),
-                  "Build mode requires non-zero stateN and MaxConn");
+    static_assert(estimate || (stateN > 0 && MaxCharStep > 0 && MaxConn > 0 && MaxSplitRange > 0 &&
+                               MaxOwnSplit > 0),
+                  "Build mode requires non-zero capacities");
 
     struct EstimateResult {
         StateTy stateN_ = 0;
+        std::size_t MaxCharStep_ = 0;
         std::size_t MaxConn_ = 0;
         std::size_t tagCount_ = 0;
     };
@@ -401,14 +441,23 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
         none,
         state_capacity_exceeded,
         invalid_state,
-        null_char_fn,
         transition_capacity_exceeded,
         epsilon_capacity_exceeded,
+        split_range_capacity_exceeded,
         invalid_repetition,
     };
 
-    using ResTy = std::conditional_t<estimate, EstimateResult, TNFAModel<stateN, MaxConn>>;
-    using AuxTy = std::conditional_t<estimate, std::vector<StateTy>, BuildData>;
+    using ResTy =
+        std::conditional_t<estimate,
+                           EstimateResult,
+                           TNFAModel<stateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit>>;
+
+    struct ConnStat {
+        std::size_t charSteps = 0;
+        std::size_t epsilonSteps = 0;
+    };
+
+    using AuxTy = std::conditional_t<estimate, std::vector<ConnStat>, BuildData>;
 
     ResTy data_{};
     AuxTy aux_{};
@@ -426,11 +475,11 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
             case BuildError::none: return "none";
             case BuildError::state_capacity_exceeded: return "state capacity exceeded";
             case BuildError::invalid_state: return "invalid state index";
-            case BuildError::null_char_fn: return "null char check function";
             case BuildError::transition_capacity_exceeded:
                 return "char transition capacity exceeded";
             case BuildError::epsilon_capacity_exceeded:
                 return "epsilon transition capacity exceeded";
+            case BuildError::split_range_capacity_exceeded: return "split range capacity exceeded";
             case BuildError::invalid_repetition: return "invalid repetition bounds";
         }
         return "unknown";
@@ -453,8 +502,8 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
         }
     }
 
-    [[nodiscard]] constexpr static auto
-        mergeTagSets(const std::vector<TagTy>& lhs, const std::vector<TagTy>& rhs)
+    [[nodiscard]] constexpr static auto mergeTagSets(const std::vector<TagTy>& lhs,
+                                                     const std::vector<TagTy>& rhs)
         -> std::vector<TagTy> {
         std::vector<TagTy> merged = lhs;
         merged.reserve(lhs.size() + rhs.size());
@@ -480,39 +529,21 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
         return Fragment{subStateEnter_, subStateExit_, subTags_};
     }
 
-    constexpr void pushDelta(StateTy from, StateTy to, CharFn charFn) {
+    constexpr void pushDelta(StateTy from,
+                             StateTy to,
+                             const typename Tree::CharRangeRef& charSupportRef,
+                             std::size_t charSupportRefIdx) {
         if constexpr(estimate) {
             if(aux_.size() <= from) {
-                aux_.resize(from + 1, 0);
+                aux_.resize(from + 1);
             }
-            aux_[from] += 1;
+            aux_[from].charSteps += 1;
         } else {
             if(from >= stateN || to >= stateN) {
                 reportBuildError(BuildError::invalid_state);
                 return;
             }
-            if(charFn == nullptr) {
-                reportBuildError(BuildError::null_char_fn);
-                return;
-            }
-            if(!data_.transition.addTransition(from, to, charFn)) {
-                reportBuildError(BuildError::transition_capacity_exceeded);
-            }
-        }
-    }
-
-    constexpr void pushDelta(StateTy from, StateTy to, char literal) {
-        if constexpr(estimate) {
-            if(aux_.size() <= from) {
-                aux_.resize(from + 1, 0);
-            }
-            aux_[from] += 1;
-        } else {
-            if(from >= stateN || to >= stateN) {
-                reportBuildError(BuildError::invalid_state);
-                return;
-            }
-            if(!data_.transition.addLiteralTransition(from, to, literal)) {
+            if(!data_.transition.addTransition(from, to, charSupportRef, charSupportRefIdx)) {
                 reportBuildError(BuildError::transition_capacity_exceeded);
             }
         }
@@ -522,9 +553,9 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
         pushEpsilonDelta(StateTy from, StateTy to, TagTy tag = tag_epsilon, int priority = 0) {
         if constexpr(estimate) {
             if(aux_.size() <= from) {
-                aux_.resize(from + 1, 0);
+                aux_.resize(from + 1);
             }
-            aux_[from] += 1;
+            aux_[from].epsilonSteps += 1;
         } else {
             if(from >= stateN || to >= stateN) {
                 reportBuildError(BuildError::invalid_state);
@@ -558,7 +589,7 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
 
     [[nodiscard]] constexpr StateTy newState() {
         if constexpr(estimate) {
-            aux_.push_back(0);
+            aux_.push_back(ConnStat{});
             return data_.stateN_++;
         } else {
             if(aux_.stateIdx_ >= stateN) {
@@ -572,9 +603,8 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
     [[nodiscard]] constexpr BuildError error() const {
         if constexpr(estimate) {
             return BuildError::none;
-        } else {
-            return buildError_;
         }
+        return buildError_;
     }
 
     [[nodiscard]] constexpr const char* errorMessage() const {
@@ -587,18 +617,24 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
 
     [[nodiscard]] constexpr auto result() {
         if constexpr(estimate) {
+            std::size_t maxCharStep = 0;
             std::size_t maxConn = 0;
             for(const auto& conn: aux_) {
-                if(conn > maxConn) {
-                    maxConn = conn;
+                if(conn.charSteps > maxCharStep) {
+                    maxCharStep = conn.charSteps;
+                }
+                if(conn.epsilonSteps > maxConn) {
+                    maxConn = conn.epsilonSteps;
                 }
             }
-            return EstimateResult{data_.stateN_, maxConn, data_.tagCount_};
+            return EstimateResult{data_.stateN_, maxCharStep, maxConn, data_.tagCount_};
         } else {
             if(buildError_ != BuildError::none) {
-                return std::optional<TNFAModel<stateN, MaxConn>>{};
+                return std::optional<
+                    TNFAModel<stateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit>>{};
             }
-            return std::optional<TNFAModel<stateN, MaxConn>>(data_);
+            return std::optional<
+                TNFAModel<stateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit>>(data_);
         }
     }
 
@@ -609,8 +645,8 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
         subTags_.clear();
     }
 
-    // Build ntags(T, qf): a chain of negative-tag epsilon transitions.
-    constexpr void ntags(const std::vector<TagTy>& tags, std::optional<StateTy> exit = std::nullopt) {
+    constexpr void ntags(const std::vector<TagTy>& tags,
+                         std::optional<StateTy> exit = std::nullopt) {
         std::vector<TagTy> normalized;
         normalized.reserve(tags.size());
         for(const auto tag: tags) {
@@ -687,14 +723,12 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
             return;
         }
 
-        // minRepeat == 1
         if(maxRepeat == 1) {
             traverse(tree_, child);
             return;
         }
 
         if(maxRepeat < 0) {
-            // e{1,inf}
             traverse(tree_, child);
             const auto oneOrMore = snapshot();
 
@@ -708,7 +742,6 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
             return;
         }
 
-        // 1 < maxRepeat < inf: e{1,m} == e · e{0,m-1}
         traverse(tree_, child);
         const auto mandatory = snapshot();
 
@@ -722,6 +755,12 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
     }
 
     constexpr void build() {
+        if constexpr(!estimate) {
+            if(!data_.transition.setSplitRanges(tree_.splitRanges, tree_.splitRangeIdx)) {
+                reportBuildError(BuildError::split_range_capacity_exceeded);
+            }
+        }
+
         if(!tree_.ok()) {
             reportBuildError(BuildError::invalid_state);
             buildEpsilon();
@@ -748,21 +787,18 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
         return false;
     }
 
-    constexpr bool visitLiteral(int nodeIdx, char literal) override {
-        (void)nodeIdx;
-        subStateEnter_ = newState();
-        subStateExit_ = newState();
-        subTags_.clear();
-        pushDelta(subStateEnter_, subStateExit_, literal);
-        return false;
-    }
+    constexpr bool visitCharRange(int nodeIdx) override {
+        if(nodeIdx < 0 || static_cast<std::size_t>(nodeIdx) >= tree_.size) {
+            reportBuildError(BuildError::invalid_state);
+            buildEpsilon();
+            return false;
+        }
 
-    constexpr bool visitCharCheck(int nodeIdx, CharFn checkFn) override {
-        (void)nodeIdx;
+        const auto& node = tree_.nodes[static_cast<std::size_t>(nodeIdx)];
         subStateEnter_ = newState();
         subStateExit_ = newState();
         subTags_.clear();
-        pushDelta(subStateEnter_, subStateExit_, checkFn);
+        pushDelta(subStateEnter_, subStateExit_, node.charSupport, node.charSupportIdx);
         return false;
     }
 
@@ -798,7 +834,6 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
 
     constexpr bool visitAlternation(int nodeIdx, int left, int right) override {
         (void)nodeIdx;
-        // Build right branch first so both branches can share its final state.
         traverse(tree_, right);
         const auto rightFrag = snapshot();
 
@@ -830,10 +865,17 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
     }
 };
 
-template <class Tree, unsigned StateN, unsigned MaxConn, unsigned TagN = 1>
+template <class Tree,
+          unsigned StateN,
+          unsigned MaxCharStep,
+          unsigned MaxConn,
+          unsigned MaxSplitRange,
+          unsigned MaxOwnSplit,
+          unsigned TagN = 1>
 [[nodiscard]] constexpr auto fromRegexTree(const Tree& tree)
-    -> std::optional<TNFAModel<StateN, MaxConn>> {
-    TNFABuilder<Tree, false, StateN, MaxConn, TagN> builder(tree);
+    -> std::optional<TNFAModel<StateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit>> {
+    TNFABuilder<Tree, false, StateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit, TagN>
+        builder(tree);
     builder.build();
     return builder.result();
 }
@@ -842,7 +884,7 @@ template <auto tree>
 [[nodiscard]] consteval auto fromRegexTreeAuto() {
     using TreeTy = std::remove_cvref_t<decltype(tree)>;
     if constexpr(!tree.ok()) {
-        return std::optional<TNFAModel<1, 1>>{};
+        return std::optional<TNFAModel<1, 1, 1, 1, 1>>{};
     } else {
         constexpr auto estimate = []() consteval {
             TNFABuilder<TreeTy, true> builder(tree);
@@ -852,12 +894,35 @@ template <auto tree>
 
         constexpr auto kStateN =
             estimate.stateN_ == 0 ? 1u : static_cast<unsigned>(estimate.stateN_);
+        constexpr auto kMaxCharStep =
+            estimate.MaxCharStep_ == 0 ? 1u : static_cast<unsigned>(estimate.MaxCharStep_);
         constexpr auto kMaxConn =
             estimate.MaxConn_ == 0 ? 1u : static_cast<unsigned>(estimate.MaxConn_);
+        constexpr auto kMaxSplitRange =
+            tree.splitRangeIdx == 0 ? 1u : static_cast<unsigned>(tree.splitRangeIdx);
+        constexpr auto kMaxOwnSplit = []() consteval {
+            std::size_t maxOwnSplit = 0;
+            for(std::size_t i = 0; i < tree.size; ++i) {
+                const auto& node = tree.nodes[i];
+                if(node.kind == regex::RegexTreeNodeKind::char_range &&
+                   node.charSupportIdx > maxOwnSplit) {
+                    maxOwnSplit = node.charSupportIdx;
+                }
+            }
+            return maxOwnSplit == 0 ? 1u : static_cast<unsigned>(maxOwnSplit);
+        }();
         constexpr auto kTagN =
             estimate.tagCount_ == 0 ? 1u : static_cast<unsigned>(estimate.tagCount_);
 
-        TNFABuilder<TreeTy, false, kStateN, kMaxConn, kTagN + 1> builder(tree);
+        TNFABuilder<TreeTy,
+                    false,
+                    kStateN,
+                    kMaxCharStep,
+                    kMaxConn,
+                    kMaxSplitRange,
+                    kMaxOwnSplit,
+                    kTagN + 1>
+            builder(tree);
         builder.build();
         return builder.result();
     }
