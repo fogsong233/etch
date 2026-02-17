@@ -37,10 +37,8 @@
 //   return 0;
 // }
 
-#include "regex.h"
 #include "str2ex.h"
 #include "tnfa.h"
-#include "ty.h"
 #include <cassert>
 
 using namespace etch;

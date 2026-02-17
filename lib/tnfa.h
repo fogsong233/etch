@@ -6,7 +6,6 @@
 
 #include "regex.h"
 #include "ty.h"
-#include "util.h"
 
 #include <algorithm>
 #include <array>
