@@ -2143,11 +2143,16 @@ public:
         if(state_ >= model_.stateIdx || !model_.isFinal[state_]) {
             return std::nullopt;
         }
+        if(pos_ >= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+            alive_ = false;
+            return std::nullopt;
+        }
+        const auto finalBoundary = static_cast<int>(pos_ + 1);
 
         if(!applyOps(model_,
                      model_.finalOps[state_],
                      registers_,
-                     static_cast<int>(pos_),
+                     finalBoundary,
                      unsetValue_)) {
             alive_ = false;
             return std::nullopt;
@@ -2184,6 +2189,7 @@ public:
             for(const auto ch: input) {
                 state_ = model_.byteDelta[state_][static_cast<unsigned char>(ch)];
             }
+            pos_ = input.size();
             return finish();
         }
         for(const auto ch: input) {
@@ -2287,7 +2293,11 @@ template <std::size_t MaxStates,
     if(state >= model.stateIdx || !model.isFinal[state]) {
         return false;
     }
-    return applyOps(model, model.finalOps[state], registers, static_cast<int>(pos), unsetValue);
+    if(pos >= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    const auto finalBoundary = static_cast<int>(pos + 1);
+    return applyOps(model, model.finalOps[state], registers, finalBoundary, unsetValue);
 }
 
 template <std::size_t MaxStates,
@@ -2343,7 +2353,11 @@ template <std::size_t MaxStates,
     if(state >= model.stateIdx || !model.isFinal[state]) {
         return std::nullopt;
     }
-    if(!applyOps(model, model.finalOps[state], registers, static_cast<int>(pos), unsetValue)) {
+    if(pos >= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return std::nullopt;
+    }
+    const auto finalBoundary = static_cast<int>(pos + 1);
+    if(!applyOps(model, model.finalOps[state], registers, finalBoundary, unsetValue)) {
         return std::nullopt;
     }
 

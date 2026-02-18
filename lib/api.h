@@ -5,8 +5,11 @@
 #include "tnfa.h"
 #include "tdfa.h"
 #include "ty.h"
+#include <cstddef>
 #include <iostream>
 #include <optional>
+#include <string_view>
+#include <type_traits>
 
 namespace etch {
 enum Strategy {
@@ -49,17 +52,28 @@ consteval auto regexify() {
 
 using TagIndexes = std::vector<int>;
 
-template <class T>
+template <class T,
+          typename = std::enable_if_t<T::ty == EtchTy::TNFAModel || T::ty == EtchTy::TDFAModel>>
 std::optional<TagIndexes> match(const T& model, std::string_view input) {
-    switch(T::ty) {
-        case EtchTy::TNFAModel: {
-            return TNFA::simulation(model, input);
-        }
-        case EtchTy::TDFAModel: {
-            return TDFA::simulation(model, input);
-        }
-            return std::nullopt;
+    if constexpr(T::ty == EtchTy::TNFAModel) {
+        return TNFA::simulation(model, input);
+    } else if constexpr(T::ty == EtchTy::TDFAModel) {
+        return TDFA::simulation(model, input);
+    } else {
+        static_assert(false, "unsupported model type");
     }
 }
 
+inline std::optional<std::string_view> sliceFromTag(std::string_view input,
+                                                    int tagIndex1,
+                                                    int tagIndex2) {
+    const auto maxBoundary = input.size() + 1;
+    if(tagIndex1 <= 0 || tagIndex2 <= 0 || static_cast<std::size_t>(tagIndex1) > maxBoundary ||
+       static_cast<std::size_t>(tagIndex2) > maxBoundary || tagIndex1 > tagIndex2) {
+        return std::nullopt;
+    }
+    const auto start = static_cast<std::size_t>(tagIndex1 - 1);
+    const auto len = static_cast<std::size_t>(tagIndex2 - tagIndex1);
+    return input.substr(start, len);
+}
 }  // namespace etch

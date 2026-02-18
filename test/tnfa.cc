@@ -43,8 +43,8 @@ void expectFixtureRuntime() {
         }
 
         for(const auto [tag, expectedIndex]: sample.tagToIndex) {
-            ut::expect(tag > 0);
-            const auto tagIdx = static_cast<std::size_t>(tag - 1);
+            ut::expect(tag >= 0);
+            const auto tagIdx = static_cast<std::size_t>(tag);
             ut::expect(tagIdx < result->size());
             if(tagIdx < result->size()) {
                 ut::expect((*result)[tagIdx] == expectedIndex);
@@ -78,6 +78,21 @@ void registerTnfaTests() {
         expectFixtureRuntime<testdata::RegexCaseId::tag_star>();
         expectFixtureRuntime<testdata::RegexCaseId::tag_plus>();
         expectFixtureRuntime<testdata::RegexCaseId::tag_repeat_range>();
+    };
+
+    "tnfa_runtime_tag_zero_based_index"_test = [] {
+        constexpr auto tree = parseToRegexTree<FixedString{R"(\g{0}a\g{-0})"}>();
+        static_assert(tree.ok());
+        constexpr auto modelOpt = TNFA::fromRegexTreeAuto<tree>();
+        static_assert(modelOpt.has_value());
+        constexpr auto model = *modelOpt;
+
+        const auto result = TNFA::simulation(model, "a");
+        ut::expect(result.has_value());
+        if(result.has_value()) {
+            ut::expect(result->size() == static_cast<std::size_t>(1));
+            ut::expect((*result)[0] == -1);
+        }
     };
 
     "tnfa_builder_errors"_test = [] {

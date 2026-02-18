@@ -95,32 +95,32 @@ struct RegexPattern<RegexCaseId::image_ext> {
 
 template <>
 struct RegexPattern<RegexCaseId::tag_basic> {
-    constexpr static auto value = FixedString{R"(\g{1}a\g{2})"};
+    constexpr static auto value = FixedString{R"(\g{0}a\g{1})"};
 };
 
 template <>
 struct RegexPattern<RegexCaseId::tag_alt_reset> {
-    constexpr static auto value = FixedString{R"(\g{1}ab|a)"};
+    constexpr static auto value = FixedString{R"(\g{0}ab|a)"};
 };
 
 template <>
 struct RegexPattern<RegexCaseId::tag_optional_reset> {
-    constexpr static auto value = FixedString{R"((\g{1}a)?a)"};
+    constexpr static auto value = FixedString{R"((\g{0}a)?a)"};
 };
 
 template <>
 struct RegexPattern<RegexCaseId::tag_star> {
-    constexpr static auto value = FixedString{R"((\g{1}a)*)"};
+    constexpr static auto value = FixedString{R"((\g{0}a)*)"};
 };
 
 template <>
 struct RegexPattern<RegexCaseId::tag_plus> {
-    constexpr static auto value = FixedString{R"((\g{1}a)+)"};
+    constexpr static auto value = FixedString{R"((\g{0}a)+)"};
 };
 
 template <>
 struct RegexPattern<RegexCaseId::tag_repeat_range> {
-    constexpr static auto value = FixedString{R"((\g{1}ab){2,3})"};
+    constexpr static auto value = FixedString{R"((\g{0}ab){2,3})"};
 };
 
 template <RegexCaseId Id>
@@ -249,8 +249,8 @@ constexpr inline std::array kImageExtStrings{
 };
 
 constexpr inline std::array kTagBasicMapA{
-    TagIndex{1, 1},
-    TagIndex{2, 1},
+    TagIndex{0, 1},
+    TagIndex{1, 2},
 };
 constexpr inline std::array kTagBasicStrings{
     RegexStringCase{"a", true,  spanOf(kTagBasicMapA)},
@@ -258,10 +258,10 @@ constexpr inline std::array kTagBasicStrings{
 };
 
 constexpr inline std::array kTagAltMapA{
-    TagIndex{1, -1},
+    TagIndex{0, -1},
 };
 constexpr inline std::array kTagAltMapAB{
-    TagIndex{1, 1},
+    TagIndex{0, 1},
 };
 constexpr inline std::array kTagAltStrings{
     RegexStringCase{"a",  true,  spanOf(kTagAltMapA) },
@@ -270,10 +270,10 @@ constexpr inline std::array kTagAltStrings{
 };
 
 constexpr inline std::array kTagOptionalMapA{
-    TagIndex{1, -1},
+    TagIndex{0, -1},
 };
 constexpr inline std::array kTagOptionalMapAA{
-    TagIndex{1, 1},
+    TagIndex{0, 1},
 };
 constexpr inline std::array kTagOptionalStrings{
     RegexStringCase{"a",  true,  spanOf(kTagOptionalMapA) },
@@ -282,10 +282,10 @@ constexpr inline std::array kTagOptionalStrings{
 };
 
 constexpr inline std::array kTagStarMapEmpty{
-    TagIndex{1, -1},
+    TagIndex{0, -1},
 };
 constexpr inline std::array kTagStarMapAAA{
-    TagIndex{1, 3},
+    TagIndex{0, 3},
 };
 constexpr inline std::array kTagStarStrings{
     RegexStringCase{"",    true,  spanOf(kTagStarMapEmpty)},
@@ -294,10 +294,10 @@ constexpr inline std::array kTagStarStrings{
 };
 
 constexpr inline std::array kTagPlusMapA{
-    TagIndex{1, 1},
+    TagIndex{0, 1},
 };
 constexpr inline std::array kTagPlusMapAAA{
-    TagIndex{1, 3},
+    TagIndex{0, 3},
 };
 constexpr inline std::array kTagPlusStrings{
     RegexStringCase{"",    false, spanOf(kNoTags)       },
@@ -306,10 +306,10 @@ constexpr inline std::array kTagPlusStrings{
 };
 
 constexpr inline std::array kTagRangeMapABAB{
-    TagIndex{1, -1},
+    TagIndex{0, -1},
 };
 constexpr inline std::array kTagRangeMapABABAB{
-    TagIndex{1, 5},
+    TagIndex{0, 5},
 };
 constexpr inline std::array kTagRangeStrings{
     RegexStringCase{"ab",       false, spanOf(kNoTags)           },

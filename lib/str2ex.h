@@ -643,16 +643,45 @@ private:
             setError(regex::RegexParseError::expected_left_brace);
             return -1;
         }
-        auto value = parseNumber();
-        if(hasError_) {
+
+        bool negative = false;
+        if(consume('+')) {
+            negative = false;
+        } else if(consume('-')) {
+            negative = true;
+        }
+
+        if(eof() || !CharHelper::isDecDigit(peek())) {
+            setError(regex::RegexParseError::invalid_integer);
             return -1;
         }
+
+        long long value = 0;
+        while(!eof() && CharHelper::isDecDigit(peek())) {
+            value = value * 10 + (advance() - '0');
+            if(value > static_cast<unsigned long long>(std::numeric_limits<int>::max())) {
+                setError(regex::RegexParseError::integer_overflow);
+                return -1;
+            }
+        }
+
         if(!consume('}')) {
             setError(regex::RegexParseError::expected_right_brace);
             return -1;
         }
 
-        return makeTagNode(static_cast<TagTy>(value));
+        // Public tag ids are 0-based (\g{0} -> result[0]).
+        // Internally we reserve tagEpsilon=0, so we shift user ids by one:
+        //   user +n -> internal +(n+1), user -n -> internal -(n+1)
+        if(!negative && value == std::numeric_limits<int>::max()) {
+            setError(regex::RegexParseError::integer_overflow);
+            return -1;
+        }
+
+        if(negative) {
+            return makeTagNode(static_cast<TagTy>(-value - 1));
+        }
+        return makeTagNode(static_cast<TagTy>(value + 1));
     }
 
     consteval auto parseNamedCharCheckEscape() -> int {

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <type_traits>
@@ -376,6 +377,9 @@ template <unsigned StateN,
     if(initialState >= StateN || finalState >= StateN) {
         return std::nullopt;
     }
+    if(input.size() >= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return std::nullopt;
+    }
 
     if(tagCount == 0) {
         tagCount = countTags(transition);
@@ -395,8 +399,8 @@ template <unsigned StateN,
         }
     }
 
-    configs =
-        epsilonClosure(configs, transition, finalState, static_cast<int>(input.size()), unsetValue);
+    const auto finalBoundary = static_cast<int>(input.size() + 1);
+    configs = epsilonClosure(configs, transition, finalState, finalBoundary, unsetValue);
 
     for(const auto& cfg: configs) {
         if(cfg.state == finalState) {
