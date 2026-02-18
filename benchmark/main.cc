@@ -20,39 +20,37 @@
 namespace etch::benchmark {
 
 template <FixedString Pattern>
-consteval auto buildTDFA() {
+consteval auto buildTNFA() {
     constexpr auto tree = parseToRegexTree<Pattern>();
     static_assert(tree.ok(), "failed to parse benchmark regex");
 
     constexpr auto tnfa = TNFA::fromRegexTreeAuto<tree>();
     static_assert(tnfa.has_value(), "failed to build TNFA for benchmark regex");
+    return tnfa.value();
+}
 
-    constexpr auto tdfa = TDFA::fromTNFAAuto<tnfa.value()>();
+template <FixedString Pattern>
+consteval auto buildTDFA() {
+    constexpr auto tnfa = buildTNFA<Pattern>();
+    constexpr auto tdfa = TDFA::fromTNFAAuto<tnfa>();
     static_assert(tdfa.has_value(), "failed to build TDFA for benchmark regex");
     return tdfa.value();
 }
 
 template <FixedString Pattern>
+constexpr auto kTNFA = buildTNFA<Pattern>();
+
+template <FixedString Pattern>
 constexpr auto kTDFA = buildTDFA<Pattern>();
 
-auto matchEtchLiteral(std::string_view input) -> bool {
-    return TDFA::simulation(kTDFA<FixedString{"abc"}>, input).has_value();
+template <FixedString Pattern>
+auto matchEtchTNFA(std::string_view input) -> bool {
+    return TNFA::simulation(kTNFA<Pattern>, input).has_value();
 }
 
-auto matchEtchEmail(std::string_view input) -> bool {
-    return TDFA::simulation(kTDFA<FixedString{R"(\w+@\w+\.\w+)"}>, input).has_value();
-}
-
-auto matchEtchDate(std::string_view input) -> bool {
-    return TDFA::simulation(kTDFA<FixedString{R"(\d{4}-\d{2}-\d{2})"}>, input).has_value();
-}
-
-auto matchEtchPath(std::string_view input) -> bool {
-    return TDFA::simulation(kTDFA<FixedString{R"(\w+/\w+(\.\w+)?)"}>, input).has_value();
-}
-
-auto matchEtchImage(std::string_view input) -> bool {
-    return TDFA::simulation(kTDFA<FixedString{R"(\w+\.(jpg|png|gif))"}>, input).has_value();
+template <FixedString Pattern>
+auto matchEtchTDFA(std::string_view input) -> bool {
+    return TDFA::isMatch(kTDFA<Pattern>, input);
 }
 
 auto matchCtreLiteral(std::string_view input) -> bool {
@@ -155,7 +153,8 @@ auto toMops(const BenchResult& result) -> double {
 
 struct CaseDef {
     std::string_view name{};
-    MatchFn etch{};
+    MatchFn etchTnfa{};
+    MatchFn etchTdfa{};
     MatchFn ctre{};
     std::vector<std::string> corpus{};
 };
@@ -173,16 +172,16 @@ auto parseU64(const char* s, uint64_t fallback) -> uint64_t {
 }
 
 void printHeader(uint64_t corpusSize, uint64_t targetOps) {
-    std::cout << "Regex benchmark (Etch TDFA vs CTRE)\n";
+    std::cout << "Regex benchmark (Etch TNFA vs Etch TDFA vs CTRE)\n";
     std::cout << "corpus_size=" << corpusSize << ", target_ops_per_case~" << targetOps << "\n\n";
-    std::cout << std::left << std::setw(22) << "case" << std::setw(10) << "engine" << std::setw(12)
+    std::cout << std::left << std::setw(22) << "case" << std::setw(12) << "engine" << std::setw(12)
               << "ns/op" << std::setw(12) << "Mops/s" << std::setw(14) << "matched" << std::setw(12)
               << "rounds" << '\n';
     std::cout << std::string(82, '-') << '\n';
 }
 
 void printLine(std::string_view caseName, std::string_view engine, const BenchResult& r) {
-    std::cout << std::left << std::setw(22) << caseName << std::setw(10) << engine << std::setw(12)
+    std::cout << std::left << std::setw(22) << caseName << std::setw(12) << engine << std::setw(12)
               << std::fixed << std::setprecision(2) << toNsPerOp(r) << std::setw(12) << std::fixed
               << std::setprecision(2) << toMops(r) << std::setw(14) << r.matchedCount
               << std::setw(12) << r.rounds << '\n';
@@ -192,13 +191,16 @@ void runCase(const CaseDef& c, uint64_t targetOps) {
     const uint64_t corpusSize = static_cast<uint64_t>(c.corpus.size());
     const uint64_t rounds = std::max<uint64_t>(1, targetOps / std::max<uint64_t>(1, corpusSize));
 
-    (void)runBenchmark(c.etch, c.corpus, 1);
+    (void)runBenchmark(c.etchTnfa, c.corpus, 1);
+    (void)runBenchmark(c.etchTdfa, c.corpus, 1);
     (void)runBenchmark(c.ctre, c.corpus, 1);
 
-    const auto etch = runBenchmark(c.etch, c.corpus, rounds);
+    const auto etchTnfa = runBenchmark(c.etchTnfa, c.corpus, rounds);
+    const auto etchTdfa = runBenchmark(c.etchTdfa, c.corpus, rounds);
     const auto ctre = runBenchmark(c.ctre, c.corpus, rounds);
 
-    printLine(c.name, "etch", etch);
+    printLine(c.name, "etch_tnfa", etchTnfa);
+    printLine(c.name, "etch_tdfa", etchTdfa);
     printLine(c.name, "ctre", ctre);
 }
 
@@ -218,29 +220,38 @@ int main(int argc, char** argv) {
 
     auto cases = std::vector<CaseDef>{
         CaseDef{"literal_abc",
-                &matchEtchLiteral,
+                &matchEtchTNFA<etch::FixedString{"abc"}>,
+                &matchEtchTDFA<etch::FixedString{"abc"}>,
                 &matchCtreLiteral,
-                makeCorpus(corpusSize, 1, 12, 11, {"abc", "ab", "abcd", "zzzabc"})                                },
+                makeCorpus(corpusSize, 1, 12, 11, {"abc", "ab", "abcd", "zzzabc"})},
         CaseDef{"email_like",
-                &matchEtchEmail,
+                &matchEtchTNFA<etch::FixedString{R"(\w+@\w+\.\w+)"}>,
+                &matchEtchTDFA<etch::FixedString{R"(\w+@\w+\.\w+)"}>,
                 &matchCtreEmail,
                 makeCorpus(corpusSize,
-                4,                        36,
-                13,                               {"alice_01@test.com", "a@b.c", "alice@test", "alice@@test.com"})},
+                           4,
+                           36,
+                           13,
+                           {"alice_01@test.com", "a@b.c", "alice@test", "alice@@test.com"})},
         CaseDef{"iso_date",
-                &matchEtchDate,
+                &matchEtchTNFA<etch::FixedString{R"(\d{4}-\d{2}-\d{2})"}>,
+                &matchEtchTDFA<etch::FixedString{R"(\d{4}-\d{2}-\d{2})"}>,
                 &matchCtreDate,
                 makeCorpus(corpusSize,
-                6,                        14,
-                17,                               {"2024-12-31", "1999-01-01", "2024/12/31", "24-12-31"})         },
+                           6,
+                           14,
+                           17,
+                           {"2024-12-31", "1999-01-01", "2024/12/31", "24-12-31"})},
         CaseDef{"path_opt_ext",
-                &matchEtchPath,
+                &matchEtchTNFA<etch::FixedString{R"(\w+/\w+(\.\w+)?)"}>,
+                &matchEtchTDFA<etch::FixedString{R"(\w+/\w+(\.\w+)?)"}>,
                 &matchCtrePath,
-                makeCorpus(corpusSize, 4, 24, 19, {"src/main.cc", "src/main", "src/", "/main.cc"})                },
-        CaseDef{
-                "image_ext",    &matchEtchImage,
+                makeCorpus(corpusSize, 4, 24, 19, {"src/main.cc", "src/main", "src/", "/main.cc"})},
+        CaseDef{"image_ext",
+                &matchEtchTNFA<etch::FixedString{R"(\w+\.(jpg|png|gif))"}>,
+                &matchEtchTDFA<etch::FixedString{R"(\w+\.(jpg|png|gif))"}>,
                 &matchCtreImage,
-                makeCorpus(corpusSize, 4, 24, 23, {"photo.jpg", "icon.png", "anim.gif", "photo.bmp"})             },
+                makeCorpus(corpusSize, 4, 24, 23, {"photo.jpg", "icon.png", "anim.gif", "photo.bmp"})},
     };
 
     printHeader(corpusSize, targetOps);

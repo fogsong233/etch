@@ -1,24 +1,19 @@
 # Regex Benchmark
 
-This benchmark compares runtime full-match throughput between:
+This benchmark compares full-match runtime throughput across:
 
-- `Etch TDFA` (this project)
-- `CTRE` (`compile-time-regular-expressions`)
+- `etch_tnfa`
+- `etch_tdfa`
+- `ctre`
 
 ## Build
 
 ```bash
-xmake f -m release --benchmark=y
-xmake
+xmake f -y -m release --benchmark=y
+xmake -y -b regex_benchmark
 ```
 
 ## Run
-
-```bash
-xmake run regex_benchmark
-```
-
-Optional arguments:
 
 ```bash
 xmake run regex_benchmark -- <corpus_size> <target_ops_per_case>
@@ -27,11 +22,14 @@ xmake run regex_benchmark -- <corpus_size> <target_ops_per_case>
 Example:
 
 ```bash
-xmake run regex_benchmark -- 16384 10000000
+xmake run regex_benchmark -- 2048 800000
 ```
 
-## Notes
+## Output Columns
 
-- Benchmarks use full-match semantics on both engines.
-- Each case runs with the same generated corpus and injected known samples.
-- Output shows `ns/op` and `Mops/s` per engine.
+- `case`: regex case name
+- `engine`: `etch_tnfa` / `etch_tdfa` / `ctre`
+- `ns/op`: average nanoseconds per match call
+- `Mops/s`: million match calls per second
+- `matched`: number of successful matches (sanity check)
+- `rounds`: loop rounds for the case

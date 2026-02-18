@@ -40,7 +40,9 @@ struct Edge {
 template <size_t MaxStates, size_t MaxCharRanges, size_t MaxRegs, size_t MaxOps, size_t MaxTags>
 struct TDFAModel {
     constexpr static auto ty = etch::EtchTy::TDFAModel;
+    constexpr static StateTy deadState = std::numeric_limits<StateTy>::max();
     std::array<std::array<Edge, MaxCharRanges>, MaxStates> delta{};
+    std::array<std::array<StateTy, 256>, MaxStates> byteDelta{};
     std::array<OpSlice, MaxStates> finalOps{};
     std::array<bool, MaxStates> isFinal{};
     StateTy startState = 0;
@@ -51,10 +53,17 @@ struct TDFAModel {
 
     // The mapping from class id to inclusive character range [first, second].
     std::array<CharPair, MaxCharRanges> rangeToPair{};
+    // 0 means "no class"; otherwise stores class_id + 1.
+    std::array<uint16_t, 256> classByBytePlusOne{};
     uint16_t classCount = 0;
 
     uint16_t regCount = 0;
     uint16_t tagCount = 0;
+    uint32_t minInputLen = 0;
+    uint32_t maxInputLen = std::numeric_limits<uint32_t>::max();
+    bool isExactLiteral = false;
+    uint16_t literalLen = 0;
+    std::array<char, MaxStates> literalBytes{};
     std::array<RegisterId, MaxTags + 1> finalRegOfTag{};
     etch::TDFAError error = etch::TDFAError::none;
 
@@ -1582,6 +1591,255 @@ private:
         return total;
     }
 
+    constexpr void computeLengthBounds(ModelTy& model) const {
+        constexpr uint32_t kInf = std::numeric_limits<uint32_t>::max();
+
+        model.minInputLen = 0;
+        model.maxInputLen = kInf;
+
+        const auto n = states_.size();
+        if(n == 0 || startState_ >= n) {
+            return;
+        }
+
+        std::vector<unsigned char> reachable(n, 0);
+        std::vector<StateTy> queue;
+        queue.reserve(n);
+        queue.push_back(startState_);
+        reachable[startState_] = 1;
+        for(std::size_t i = 0; i < queue.size(); ++i) {
+            const auto s = queue[i];
+            for(std::size_t c = 0; c < classCount_; ++c) {
+                if(!model.delta[s][c].enabled) {
+                    continue;
+                }
+                const auto to = model.delta[s][c].to;
+                if(to >= n || reachable[to] != 0) {
+                    continue;
+                }
+                reachable[to] = 1;
+                queue.push_back(to);
+            }
+        }
+
+        std::vector<std::vector<StateTy>> reverse(n);
+        for(std::size_t s = 0; s < n; ++s) {
+            for(std::size_t c = 0; c < classCount_; ++c) {
+                if(!model.delta[s][c].enabled) {
+                    continue;
+                }
+                const auto to = model.delta[s][c].to;
+                if(to < n) {
+                    reverse[to].push_back(static_cast<StateTy>(s));
+                }
+            }
+        }
+
+        std::vector<unsigned char> canReachFinal(n, 0);
+        queue.clear();
+        for(std::size_t s = 0; s < n; ++s) {
+            if(!model.isFinal[s]) {
+                continue;
+            }
+            canReachFinal[s] = 1;
+            queue.push_back(static_cast<StateTy>(s));
+        }
+        for(std::size_t i = 0; i < queue.size(); ++i) {
+            const auto s = queue[i];
+            for(const auto pre: reverse[s]) {
+                if(canReachFinal[pre] != 0) {
+                    continue;
+                }
+                canReachFinal[pre] = 1;
+                queue.push_back(pre);
+            }
+        }
+
+        std::vector<unsigned char> relevant(n, 0);
+        std::size_t relevantCount = 0;
+        for(std::size_t s = 0; s < n; ++s) {
+            if(reachable[s] != 0 && canReachFinal[s] != 0) {
+                relevant[s] = 1;
+                ++relevantCount;
+            }
+        }
+        if(relevant[startState_] == 0) {
+            return;
+        }
+
+        std::vector<uint32_t> dist(n, kInf);
+        queue.clear();
+        dist[startState_] = 0;
+        queue.push_back(startState_);
+        for(std::size_t i = 0; i < queue.size(); ++i) {
+            const auto s = queue[i];
+            const auto d = dist[s];
+            for(std::size_t c = 0; c < classCount_; ++c) {
+                if(!model.delta[s][c].enabled) {
+                    continue;
+                }
+                const auto to = model.delta[s][c].to;
+                if(to >= n || reachable[to] == 0) {
+                    continue;
+                }
+                const auto nd = d + 1;
+                if(nd < dist[to]) {
+                    dist[to] = nd;
+                    queue.push_back(to);
+                }
+            }
+        }
+
+        uint32_t minLen = kInf;
+        for(std::size_t s = 0; s < n; ++s) {
+            if(!model.isFinal[s] || relevant[s] == 0) {
+                continue;
+            }
+            if(dist[s] < minLen) {
+                minLen = dist[s];
+            }
+        }
+        if(minLen == kInf) {
+            return;
+        }
+        model.minInputLen = minLen;
+
+        std::vector<uint32_t> indegree(n, 0);
+        for(std::size_t s = 0; s < n; ++s) {
+            if(relevant[s] == 0) {
+                continue;
+            }
+            for(std::size_t c = 0; c < classCount_; ++c) {
+                if(!model.delta[s][c].enabled) {
+                    continue;
+                }
+                const auto to = model.delta[s][c].to;
+                if(to < n && relevant[to] != 0) {
+                    indegree[to] += 1;
+                }
+            }
+        }
+
+        queue.clear();
+        queue.reserve(relevantCount);
+        for(std::size_t s = 0; s < n; ++s) {
+            if(relevant[s] != 0 && indegree[s] == 0) {
+                queue.push_back(static_cast<StateTy>(s));
+            }
+        }
+
+        std::vector<StateTy> topo;
+        topo.reserve(relevantCount);
+        for(std::size_t i = 0; i < queue.size(); ++i) {
+            const auto s = queue[i];
+            topo.push_back(s);
+            for(std::size_t c = 0; c < classCount_; ++c) {
+                if(!model.delta[s][c].enabled) {
+                    continue;
+                }
+                const auto to = model.delta[s][c].to;
+                if(to >= n || relevant[to] == 0) {
+                    continue;
+                }
+                if(--indegree[to] == 0) {
+                    queue.push_back(to);
+                }
+            }
+        }
+
+        if(topo.size() < relevantCount) {
+            model.maxInputLen = kInf;
+            return;
+        }
+
+        std::vector<int64_t> longest(n, -1);
+        longest[startState_] = 0;
+        for(const auto s: topo) {
+            const auto base = longest[s];
+            if(base < 0) {
+                continue;
+            }
+            for(std::size_t c = 0; c < classCount_; ++c) {
+                if(!model.delta[s][c].enabled) {
+                    continue;
+                }
+                const auto to = model.delta[s][c].to;
+                if(to >= n || relevant[to] == 0) {
+                    continue;
+                }
+                const auto cand = base + 1;
+                if(cand > longest[to]) {
+                    longest[to] = cand;
+                }
+            }
+        }
+
+        uint32_t maxLen = 0;
+        for(std::size_t s = 0; s < n; ++s) {
+            if(!model.isFinal[s] || relevant[s] == 0 || longest[s] < 0) {
+                continue;
+            }
+            const auto candidate = static_cast<uint32_t>(longest[s]);
+            if(candidate > maxLen) {
+                maxLen = candidate;
+            }
+        }
+        model.maxInputLen = maxLen;
+    }
+
+    constexpr void computeExactLiteral(ModelTy& model) const {
+        model.isExactLiteral = false;
+        model.literalLen = 0;
+
+        if(model.maxInputLen == std::numeric_limits<uint32_t>::max() ||
+           model.minInputLen != model.maxInputLen) {
+            return;
+        }
+
+        const auto len = static_cast<std::size_t>(model.maxInputLen);
+        if(len > model.literalBytes.size() || startState_ >= states_.size()) {
+            return;
+        }
+
+        StateTy state = startState_;
+        for(std::size_t i = 0; i < len; ++i) {
+            if(state >= states_.size()) {
+                return;
+            }
+
+            std::size_t enabledCount = 0;
+            std::size_t classId = 0;
+            for(std::size_t c = 0; c < classCount_; ++c) {
+                if(!model.delta[state][c].enabled) {
+                    continue;
+                }
+                enabledCount += 1;
+                classId = c;
+                if(enabledCount > 1) {
+                    return;
+                }
+            }
+            if(enabledCount != 1) {
+                return;
+            }
+
+            const auto range = model.rangeToPair[classId];
+            if(range.first != range.second) {
+                return;
+            }
+
+            model.literalBytes[i] = static_cast<char>(range.first);
+            state = model.delta[state][classId].to;
+        }
+
+        if(state >= states_.size() || !model.isFinal[state]) {
+            return;
+        }
+
+        model.isExactLiteral = true;
+        model.literalLen = static_cast<uint16_t>(len);
+    }
+
     [[nodiscard]] constexpr auto materializeModel() -> std::optional<ModelTy> {
         ModelTy model{};
         model.startState = startState_;
@@ -1589,9 +1847,20 @@ private:
         model.classCount = clampToU16(classCount_);
         model.regCount = clampToU16(regCount_);
         model.tagCount = clampToU16(tagCount_);
+        for(std::size_t s = 0; s < states_.size(); ++s) {
+            model.byteDelta[s].fill(ModelTy::deadState);
+        }
 
         for(std::size_t i = 0; i < classCount_; ++i) {
             model.rangeToPair[i] = tnfaModel_.transition.splitRanges[i];
+        }
+        model.classByBytePlusOne.fill(0);
+        for(std::size_t i = 0; i < classCount_; ++i) {
+            const auto range = model.rangeToPair[i];
+            const auto classCode = static_cast<uint16_t>(i + 1);
+            for(uint16_t code = range.first; code <= range.second; ++code) {
+                model.classByBytePlusOne[code] = classCode;
+            }
         }
         for(std::size_t t = 1; t <= tagCount_; ++t) {
             model.finalRegOfTag[t] = finalRegOfTag_[t];
@@ -1611,6 +1880,11 @@ private:
                 model.delta[s][c].enabled = true;
                 model.delta[s][c].to = delta_[s][c].to;
                 model.delta[s][c].ops = slice;
+
+                const auto range = model.rangeToPair[c];
+                for(uint16_t code = range.first; code <= range.second; ++code) {
+                    model.byteDelta[s][code] = delta_[s][c].to;
+                }
             }
 
             if(states_[s].isFinal) {
@@ -1621,6 +1895,9 @@ private:
                 model.finalOps[s] = slice;
             }
         }
+
+        computeLengthBounds(model);
+        computeExactLiteral(model);
 
         model.error = buildError_;
         return model;
@@ -1706,25 +1983,11 @@ template <std::size_t MaxStates,
           std::size_t MaxRegs,
           std::size_t MaxOps,
           std::size_t MaxTags>
-[[nodiscard]] constexpr auto
-    classify(const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model, char ch)
-        -> std::optional<ClassId> {
-    const auto code = static_cast<CharTy>(static_cast<unsigned char>(ch));
-
-    std::size_t lo = 0;
-    std::size_t hi = model.classCount;
-    while(lo < hi) {
-        const auto mid = lo + (hi - lo) / 2;
-        const auto range = model.rangeToPair[mid];
-        if(code < range.first) {
-            hi = mid;
-        } else if(code > range.second) {
-            lo = mid + 1;
-        } else {
-            return static_cast<ClassId>(mid);
-        }
-    }
-    return std::nullopt;
+[[nodiscard]] constexpr auto classByBytePlusOne(
+    const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
+    char ch) -> uint16_t {
+    const auto code = static_cast<unsigned char>(ch);
+    return model.classByBytePlusOne[code];
 }
 
 template <std::size_t MaxStates,
@@ -1733,9 +1996,25 @@ template <std::size_t MaxStates,
           std::size_t MaxOps,
           std::size_t MaxTags>
 [[nodiscard]] constexpr auto
+    classify(const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model, char ch)
+        -> std::optional<ClassId> {
+    const auto encoded = classByBytePlusOne(model, ch);
+    if(encoded == 0) {
+        return std::nullopt;
+    }
+    return static_cast<ClassId>(encoded - 1);
+}
+
+template <std::size_t MaxStates,
+          std::size_t MaxCharRanges,
+          std::size_t MaxRegs,
+          std::size_t MaxOps,
+          std::size_t MaxTags,
+          typename RegisterStorage>
+[[nodiscard]] constexpr auto
     applyOps(const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
              OpSlice slice,
-             std::vector<int>& registers,
+             RegisterStorage& registers,
              int curPos,
              int unsetValue) -> bool {
     if(static_cast<std::size_t>(slice.off) + static_cast<std::size_t>(slice.len) >
@@ -1760,6 +2039,24 @@ template <std::size_t MaxStates,
                 registers[op.lhs] = registers[op.rhs];
                 break;
         }
+    }
+    return true;
+}
+
+template <std::size_t MaxStates,
+          std::size_t MaxCharRanges,
+          std::size_t MaxRegs,
+          std::size_t MaxOps,
+          std::size_t MaxTags>
+[[nodiscard]] constexpr auto lengthMightMatch(
+    const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
+    std::size_t inputLen) -> bool {
+    if(inputLen < model.minInputLen) {
+        return false;
+    }
+    if(model.maxInputLen != std::numeric_limits<uint32_t>::max() &&
+       inputLen > model.maxInputLen) {
+        return false;
     }
     return true;
 }
@@ -1802,13 +2099,25 @@ public:
             return false;
         }
 
-        const auto classId = classify(model_, ch);
-        if(!classId.has_value()) {
+        if(model_.opPoolIdx == 0) {
+            const auto next = model_.byteDelta[state_][static_cast<unsigned char>(ch)];
+            if(next == ModelTy::deadState) {
+                alive_ = false;
+                return false;
+            }
+            state_ = next;
+            ++pos_;
+            return true;
+        }
+
+        const auto classIdPlusOne = classByBytePlusOne(model_, ch);
+        if(classIdPlusOne == 0) {
             alive_ = false;
             return false;
         }
+        const auto classId = static_cast<ClassId>(classIdPlusOne - 1);
 
-        const auto& edge = model_.delta[state_][*classId];
+        const auto& edge = model_.delta[state_][classId];
         if(!edge.enabled) {
             alive_ = false;
             return false;
@@ -1861,6 +2170,22 @@ public:
         if(!reset()) {
             return std::nullopt;
         }
+        if(!lengthMightMatch(model_, input.size())) {
+            return std::nullopt;
+        }
+        if(model_.isExactLiteral) {
+            if(input.size() != model_.literalLen ||
+               std::char_traits<char>::compare(input.data(),
+                                               model_.literalBytes.data(),
+                                               input.size()) != 0) {
+                return std::nullopt;
+            }
+            state_ = model_.startState;
+            for(const auto ch: input) {
+                state_ = model_.byteDelta[state_][static_cast<unsigned char>(ch)];
+            }
+            return finish();
+        }
         for(const auto ch: input) {
             if(!step(ch)) {
                 return std::nullopt;
@@ -1901,12 +2226,135 @@ template <std::size_t MaxStates,
           std::size_t MaxRegs,
           std::size_t MaxOps,
           std::size_t MaxTags>
+[[nodiscard]] auto isMatch(const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
+                           std::string_view input,
+                           int unsetValue = TNFA::offset_unset) -> bool {
+    if(model.stateIdx == 0 || model.startState >= model.stateIdx) {
+        return false;
+    }
+    if(!lengthMightMatch(model, input.size())) {
+        return false;
+    }
+    if(model.isExactLiteral) {
+        if(input.size() != model.literalLen) {
+            return false;
+        }
+        for(std::size_t i = 0; i < input.size(); ++i) {
+            if(input[i] != model.literalBytes[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    StateTy state = model.startState;
+
+    if(model.opPoolIdx == 0) {
+        for(const auto ch: input) {
+            const auto next = model.byteDelta[state][static_cast<unsigned char>(ch)];
+            if(next == TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>::deadState) {
+                return false;
+            }
+            state = next;
+        }
+        return model.isFinal[state];
+    }
+
+    std::array<int, MaxRegs + 1> registers{};
+    registers.fill(unsetValue);
+    std::size_t pos = 0;
+
+    for(const auto ch: input) {
+        const auto classIdPlusOne = classByBytePlusOne(model, ch);
+        if(classIdPlusOne == 0) {
+            return false;
+        }
+        const auto classId = static_cast<ClassId>(classIdPlusOne - 1);
+        const auto& edge = model.delta[state][classId];
+        if(!edge.enabled) {
+            return false;
+        }
+        if(!applyOps(model, edge.ops, registers, static_cast<int>(pos + 1), unsetValue)) {
+            return false;
+        }
+        state = edge.to;
+        if(state >= model.stateIdx) {
+            return false;
+        }
+        ++pos;
+    }
+
+    if(state >= model.stateIdx || !model.isFinal[state]) {
+        return false;
+    }
+    return applyOps(model, model.finalOps[state], registers, static_cast<int>(pos), unsetValue);
+}
+
+template <std::size_t MaxStates,
+          std::size_t MaxCharRanges,
+          std::size_t MaxRegs,
+          std::size_t MaxOps,
+          std::size_t MaxTags>
 [[nodiscard]] auto
     simulation(const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
                std::string_view input,
                int unsetValue = TNFA::offset_unset) -> std::optional<std::vector<int>> {
-    Runtime<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags> runtime(model, unsetValue);
-    return runtime.run(input);
+    if(!lengthMightMatch(model, input.size())) {
+        return std::nullopt;
+    }
+
+    if(model.tagCount == 0) {
+        if(!isMatch(model, input, unsetValue)) {
+            return std::nullopt;
+        }
+        return std::vector<int>{};
+    }
+
+    if(model.stateIdx == 0 || model.startState >= model.stateIdx ||
+       model.regCount >= static_cast<uint16_t>(MaxRegs + 1)) {
+        return std::nullopt;
+    }
+
+    std::array<int, MaxRegs + 1> registers{};
+    registers.fill(unsetValue);
+
+    StateTy state = model.startState;
+    std::size_t pos = 0;
+    for(const auto ch: input) {
+        const auto classIdPlusOne = classByBytePlusOne(model, ch);
+        if(classIdPlusOne == 0) {
+            return std::nullopt;
+        }
+        const auto classId = static_cast<ClassId>(classIdPlusOne - 1);
+        const auto& edge = model.delta[state][classId];
+        if(!edge.enabled) {
+            return std::nullopt;
+        }
+        if(!applyOps(model, edge.ops, registers, static_cast<int>(pos + 1), unsetValue)) {
+            return std::nullopt;
+        }
+        state = edge.to;
+        if(state >= model.stateIdx) {
+            return std::nullopt;
+        }
+        ++pos;
+    }
+
+    if(state >= model.stateIdx || !model.isFinal[state]) {
+        return std::nullopt;
+    }
+    if(!applyOps(model, model.finalOps[state], registers, static_cast<int>(pos), unsetValue)) {
+        return std::nullopt;
+    }
+
+    std::vector<int> out(model.tagCount, unsetValue);
+    for(std::size_t t = 1; t <= model.tagCount; ++t) {
+        const auto reg = model.finalRegOfTag[t];
+        if(reg != 0 && static_cast<std::size_t>(reg) < registers.size()) {
+            out[t - 1] = registers[reg];
+        }
+    }
+    return out;
 }
 
 }  // namespace etch::TDFA
