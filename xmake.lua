@@ -7,9 +7,14 @@ set_languages("c++23")
 
 option("dev", {default = true})
 option("test", {default = true})
+option("benchmark", {default = false})
 
 if has_config("test") then
     add_requires("boost_ut")
+end
+
+if has_config("benchmark") then
+    add_requires("ctre")
 end
 
 if has_config("dev") then
@@ -54,4 +59,12 @@ if has_config("test") then
         add_files("test/*.cc")
         add_deps("lib")
         add_packages("boost_ut")
+end
+
+if has_config("benchmark") then
+    target("regex_benchmark")
+        set_kind("binary")
+        add_files("benchmark/*.cc")
+        add_deps("lib")
+        add_packages("ctre")
 end

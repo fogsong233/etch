@@ -33,14 +33,14 @@ template <unsigned StateN,
 struct Transition {
     struct CharStep {
         StateTy another = 0;
-        std::array<CharTy, MaxOwnSplit> charSupportRef{};
+        std::array<std::size_t, MaxOwnSplit> charSupportRef{};  // the index in splitRanges
         std::size_t charSupportRefIdx = 0;
         bool isEnabled = false;
     };
 
     struct EpsilonStep {
         StateTy another = 0;
-        TagTy tag = tag_epsilon;
+        TagTy tag = tagEpsilon;
         int priority = 0;
         bool isEnabled = false;
     };
@@ -59,7 +59,7 @@ struct Transition {
 private:
     constexpr static bool addCharStep(Steps& steps,
                                       StateTy another,
-                                      const std::array<CharTy, MaxOwnSplit>& charSupportRef,
+                                      const std::array<std::size_t, MaxOwnSplit>& charSupportRef,
                                       std::size_t charSupportRefIdx) {
         if(charSupportRefIdx > MaxOwnSplit) {
             return false;
@@ -129,7 +129,7 @@ public:
 
     constexpr bool addTransition(StateTy from,
                                  StateTy to,
-                                 const std::array<CharTy, MaxOwnSplit>& charSupportRef,
+                                 const std::array<std::size_t, MaxOwnSplit>& charSupportRef,
                                  std::size_t charSupportRefIdx) {
         if(from >= StateN || to >= StateN) {
             return false;
@@ -142,7 +142,7 @@ public:
     }
 
     constexpr bool
-        addEpsilonTransition(StateTy from, StateTy to, TagTy tag = tag_epsilon, int priority = 0) {
+        addEpsilonTransition(StateTy from, StateTy to, TagTy tag = tagEpsilon, int priority = 0) {
         if(from >= StateN || to >= StateN) {
             return false;
         }
@@ -169,13 +169,31 @@ template <unsigned StateN,
           unsigned MaxSplitRange,
           unsigned MaxOwnSplit>
 struct TNFAModel {
+    constexpr static auto ty = etch::EtchTy::TNFAModel;
     StateTy initialState{};
     StateTy finalState{};
     Transition<StateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit> transition{};
+    TNFAError error = TNFAError::none;
+
+    constexpr auto tagSize() const {
+        return countTags(transition);
+    }
+
+    constexpr auto stateSize() const {
+        return StateN;
+    }
+
+    constexpr auto charRangeSize() const {
+        return transition.splitRangeIdx + 1;
+    }
+
+    [[nodiscard]] constexpr auto errorMsg(TNFAError err) const -> const char* {
+        return TNFAErrorToString(err);
+    }
 };
 
 inline void applyTagUpdate(std::vector<int>& offsets, TagTy tag, int position, int unsetValue) {
-    if(tag == tag_epsilon) {
+    if(tag == tagEpsilon) {
         return;
     }
 
@@ -222,7 +240,7 @@ template <unsigned StateN,
     std::size_t maxTag = 0;
     for(const auto& steps: transition.toMap) {
         for(const auto& edge: steps.epsilonSteps) {
-            if(!edge.isEnabled || edge.tag == tag_epsilon) {
+            if(!edge.isEnabled || edge.tag == tagEpsilon) {
                 continue;
             }
             const auto absTag = static_cast<std::size_t>(edge.tag > 0 ? edge.tag : -edge.tag);
@@ -436,16 +454,6 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
         std::vector<TagTy> tags{};
     };
 
-    enum class BuildError {
-        none,
-        state_capacity_exceeded,
-        invalid_state,
-        transition_capacity_exceeded,
-        epsilon_capacity_exceeded,
-        split_range_capacity_exceeded,
-        invalid_repetition,
-    };
-
     using ResTy =
         std::conditional_t<estimate,
                            EstimateResult,
@@ -460,7 +468,7 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
 
     ResTy data_{};
     AuxTy aux_{};
-    BuildError buildError_ = BuildError::none;
+    TNFAError buildError_ = TNFAError::none;
 
     StateTy subStateEnter_ = 0;
     StateTy subStateExit_ = 0;
@@ -469,24 +477,9 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
 
     constexpr explicit TNFABuilder(const Tree& tree) : tree_(tree) {}
 
-    constexpr const static char* buildErrorToString(BuildError err) {
-        switch(err) {
-            case BuildError::none: return "none";
-            case BuildError::state_capacity_exceeded: return "state capacity exceeded";
-            case BuildError::invalid_state: return "invalid state index";
-            case BuildError::transition_capacity_exceeded:
-                return "char transition capacity exceeded";
-            case BuildError::epsilon_capacity_exceeded:
-                return "epsilon transition capacity exceeded";
-            case BuildError::split_range_capacity_exceeded: return "split range capacity exceeded";
-            case BuildError::invalid_repetition: return "invalid repetition bounds";
-        }
-        return "unknown";
-    }
-
-    constexpr void reportBuildError(BuildError err) {
+    constexpr void reportBuildError(TNFAError err) {
         if constexpr(!estimate) {
-            if(buildError_ == BuildError::none) {
+            if(buildError_ == TNFAError::none) {
                 buildError_ = err;
             }
         }
@@ -513,7 +506,7 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
     }
 
     constexpr void recordTagUsage(TagTy tag) {
-        if(tag == tag_epsilon) {
+        if(tag == tagEpsilon) {
             return;
         }
         const auto absTag = static_cast<std::size_t>(tag > 0 ? tag : -tag);
@@ -539,17 +532,17 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
             aux_[from].charSteps += 1;
         } else {
             if(from >= stateN || to >= stateN) {
-                reportBuildError(BuildError::invalid_state);
+                reportBuildError(TNFAError::invalid_state);
                 return;
             }
             if(!data_.transition.addTransition(from, to, charSupportRef, charSupportRefIdx)) {
-                reportBuildError(BuildError::transition_capacity_exceeded);
+                reportBuildError(TNFAError::transition_capacity_exceeded);
             }
         }
     }
 
     constexpr void
-        pushEpsilonDelta(StateTy from, StateTy to, TagTy tag = tag_epsilon, int priority = 0) {
+        pushEpsilonDelta(StateTy from, StateTy to, TagTy tag = tagEpsilon, int priority = 0) {
         if constexpr(estimate) {
             if(aux_.size() <= from) {
                 aux_.resize(from + 1);
@@ -557,11 +550,11 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
             aux_[from].epsilonSteps += 1;
         } else {
             if(from >= stateN || to >= stateN) {
-                reportBuildError(BuildError::invalid_state);
+                reportBuildError(TNFAError::invalid_state);
                 return;
             }
             if(!data_.transition.addEpsilonTransition(from, to, tag, priority)) {
-                reportBuildError(BuildError::epsilon_capacity_exceeded);
+                reportBuildError(TNFAError::epsilon_capacity_exceeded);
             }
         }
     }
@@ -569,7 +562,7 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
     constexpr void setInitialState(StateTy state) {
         if constexpr(!estimate) {
             if(state >= stateN) {
-                reportBuildError(BuildError::invalid_state);
+                reportBuildError(TNFAError::invalid_state);
                 return;
             }
             data_.initialState = state;
@@ -579,7 +572,7 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
     constexpr void setFinalState(StateTy state) {
         if constexpr(!estimate) {
             if(state >= stateN) {
-                reportBuildError(BuildError::invalid_state);
+                reportBuildError(TNFAError::invalid_state);
                 return;
             }
             data_.finalState = state;
@@ -592,26 +585,26 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
             return data_.stateN_++;
         } else {
             if(aux_.stateIdx_ >= stateN) {
-                reportBuildError(BuildError::state_capacity_exceeded);
+                reportBuildError(TNFAError::state_capacity_exceeded);
                 return stateN;
             }
             return aux_.stateIdx_++;
         }
     }
 
-    [[nodiscard]] constexpr BuildError error() const {
+    [[nodiscard]] constexpr TNFAError error() const {
         if constexpr(estimate) {
-            return BuildError::none;
+            return TNFAError::none;
         }
         return buildError_;
     }
 
     [[nodiscard]] constexpr const char* errorMessage() const {
-        return buildErrorToString(error());
+        return TNFAErrorToString(error());
     }
 
     [[nodiscard]] constexpr bool ok() const {
-        return error() == BuildError::none;
+        return error() == TNFAError::none;
     }
 
     [[nodiscard]] constexpr auto result() {
@@ -628,10 +621,11 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
             }
             return EstimateResult{data_.stateN_, maxCharStep, maxConn, data_.tagCount_};
         } else {
-            if(buildError_ != BuildError::none) {
+            if(buildError_ != TNFAError::none) {
                 return std::optional<
                     TNFAModel<stateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit>>{};
             }
+            data_.error = buildError_;
             return std::optional<
                 TNFAModel<stateN, MaxCharStep, MaxConn, MaxSplitRange, MaxOwnSplit>>(data_);
         }
@@ -680,7 +674,7 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
 
     constexpr void buildRepetitionNode(int child, int minRepeat, int maxRepeat) {
         if(minRepeat < 0 || (maxRepeat >= 0 && maxRepeat < minRepeat)) {
-            reportBuildError(BuildError::invalid_repetition);
+            reportBuildError(TNFAError::invalid_repetition);
             buildEpsilon();
             return;
         }
@@ -713,8 +707,8 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
             const auto zeroBranch = snapshot();
 
             const auto entry = newState();
-            pushEpsilonDelta(entry, oneToMany.enter, tag_epsilon, 1);
-            pushEpsilonDelta(entry, zeroBranch.enter, tag_epsilon, 2);
+            pushEpsilonDelta(entry, oneToMany.enter, tagEpsilon, 1);
+            pushEpsilonDelta(entry, zeroBranch.enter, tagEpsilon, 2);
 
             subStateEnter_ = entry;
             subStateExit_ = oneToMany.exit;
@@ -732,8 +726,8 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
             const auto oneOrMore = snapshot();
 
             const auto finalState = newState();
-            pushEpsilonDelta(oneOrMore.exit, oneOrMore.enter, tag_epsilon, 1);
-            pushEpsilonDelta(oneOrMore.exit, finalState, tag_epsilon, 2);
+            pushEpsilonDelta(oneOrMore.exit, oneOrMore.enter, tagEpsilon, 1);
+            pushEpsilonDelta(oneOrMore.exit, finalState, tagEpsilon, 2);
 
             subStateEnter_ = oneOrMore.enter;
             subStateExit_ = finalState;
@@ -756,12 +750,12 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
     constexpr void build() {
         if constexpr(!estimate) {
             if(!data_.transition.setSplitRanges(tree_.splitRanges, tree_.splitRangeIdx)) {
-                reportBuildError(BuildError::split_range_capacity_exceeded);
+                reportBuildError(TNFAError::split_range_capacity_exceeded);
             }
         }
 
         if(!tree_.ok()) {
-            reportBuildError(BuildError::invalid_state);
+            reportBuildError(TNFAError::invalid_state);
             buildEpsilon();
             setInitialState(subStateEnter_);
             setFinalState(subStateExit_);
@@ -781,14 +775,14 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
 
     constexpr bool visitInvalidNode(int nodeIdx) override {
         (void)nodeIdx;
-        reportBuildError(BuildError::invalid_state);
+        reportBuildError(TNFAError::invalid_state);
         buildEpsilon();
         return false;
     }
 
     constexpr bool visitCharRange(int nodeIdx) override {
         if(nodeIdx < 0 || static_cast<std::size_t>(nodeIdx) >= tree_.size) {
-            reportBuildError(BuildError::invalid_state);
+            reportBuildError(TNFAError::invalid_state);
             buildEpsilon();
             return false;
         }
@@ -806,7 +800,7 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
         subStateEnter_ = newState();
         subStateExit_ = newState();
         subTags_.clear();
-        if(tag == tag_epsilon) {
+        if(tag == tagEpsilon) {
             pushEpsilonDelta(subStateEnter_, subStateExit_);
             return false;
         }
@@ -848,8 +842,8 @@ struct TNFABuilder : regex::RecursiveRegexVisitor {
         const auto resetLeftTags = snapshot();
 
         const auto entry = newState();
-        pushEpsilonDelta(entry, leftFrag.enter, tag_epsilon, 1);
-        pushEpsilonDelta(entry, resetLeftTags.enter, tag_epsilon, 2);
+        pushEpsilonDelta(entry, leftFrag.enter, tagEpsilon, 1);
+        pushEpsilonDelta(entry, resetLeftTags.enter, tagEpsilon, 2);
 
         subStateEnter_ = entry;
         subStateExit_ = rightFrag.exit;

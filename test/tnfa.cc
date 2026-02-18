@@ -54,7 +54,7 @@ void expectFixtureRuntime() {
 }
 
 template <class Builder>
-void expectBuildError(Builder& builder, typename Builder::BuildError err) {
+void expectBuildError(Builder& builder, TNFAError err) {
     builder.build();
     ut::expect(builder.error() == err);
 }
@@ -86,7 +86,7 @@ void registerTnfaTests() {
                 testdata::kParseErrorPattern<testdata::ParseErrorCaseId::missing_right_paren>>();
             using Builder = TNFA::TNFABuilder<decltype(tree), false, 8, 1, 2, 8, 1>;
             Builder builder(tree);
-            expectBuildError(builder, Builder::BuildError::invalid_state);
+            expectBuildError(builder, TNFAError::invalid_state);
         }
 
         {
@@ -94,21 +94,21 @@ void registerTnfaTests() {
                 parseToRegexTree<testdata::kRegexPattern<testdata::RegexCaseId::literal>>();
             using Builder = TNFA::TNFABuilder<decltype(tree), false, 2, 1, 2, 8, 1>;
             Builder builder(tree);
-            expectBuildError(builder, Builder::BuildError::state_capacity_exceeded);
+            expectBuildError(builder, TNFAError::state_capacity_exceeded);
         }
 
         {
             constexpr auto tree = parseToRegexTree<testdata::kBuilderEpsilonPattern>();
             using Builder = TNFA::TNFABuilder<decltype(tree), false, 32, 1, 1, 8, 1>;
             Builder builder(tree);
-            expectBuildError(builder, Builder::BuildError::epsilon_capacity_exceeded);
+            expectBuildError(builder, TNFAError::epsilon_capacity_exceeded);
         }
 
         {
             constexpr auto tree = parseToRegexTree<testdata::kBuilderSplitRangePattern>();
             using Builder = TNFA::TNFABuilder<decltype(tree), false, 32, 1, 2, 1, 4>;
             Builder builder(tree);
-            expectBuildError(builder, Builder::BuildError::split_range_capacity_exceeded);
+            expectBuildError(builder, TNFAError::split_range_capacity_exceeded);
         }
 
         {
@@ -122,7 +122,7 @@ void registerTnfaTests() {
 
             using Builder = TNFA::TNFABuilder<decltype(baseTree), false, 8, 1, 2, 4, 4>;
             Builder builder(invalidCharSupportTree);
-            expectBuildError(builder, Builder::BuildError::transition_capacity_exceeded);
+            expectBuildError(builder, TNFAError::transition_capacity_exceeded);
         }
 
         {
@@ -140,7 +140,7 @@ void registerTnfaTests() {
 
             using Builder = TNFA::TNFABuilder<decltype(baseTree), false, 16, 1, 2, 8, 1>;
             Builder builder(invalidRepeatTree);
-            expectBuildError(builder, Builder::BuildError::invalid_repetition);
+            expectBuildError(builder, TNFAError::invalid_repetition);
         }
     };
 }

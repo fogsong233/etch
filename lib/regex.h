@@ -45,38 +45,10 @@ enum class RegexTreeNodeKind {
     repetition,
 };
 
-enum class RegexParseError {
-    none,
-    unexpected_end,
-    unexpected_token,
-    expected_right_paren,
-    expected_left_brace,
-    expected_right_brace,
-    invalid_integer,
-    integer_overflow,
-    unknown_named_char_check,
-    too_many_nodes,
-};
-
-const inline char* RegexParseErrorToString(RegexParseError error) {
-    switch(error) {
-        case RegexParseError::none: return "none";
-        case RegexParseError::unexpected_end: return "unexpected end of pattern";
-        case RegexParseError::unexpected_token: return "unexpected token";
-        case RegexParseError::expected_right_paren: return "expected ')'";
-        case RegexParseError::expected_left_brace: return "expected '{'";
-        case RegexParseError::expected_right_brace: return "expected '}'";
-        case RegexParseError::invalid_integer: return "invalid integer in quantifier";
-        case RegexParseError::integer_overflow: return "integer overflow in quantifier";
-        case RegexParseError::unknown_named_char_check: return "unknown named character check";
-        case RegexParseError::too_many_nodes: return "too many nodes in regex tree";
-        default: return "unknown error";
-    }
-}
-
 template <std::size_t MaxNodes, std::size_t SplitRangeCnt, std::size_t MaxOwnRange>
 struct RegexTree {
-    using CharRangeRef = std::array<CharTy, MaxOwnRange>;
+    constexpr static auto ty = etch::EtchTy::RegexTree;
+    using CharRangeRef = std::array<std::size_t, MaxOwnRange>;
 
     struct Node {
         RegexTreeNodeKind kind = RegexTreeNodeKind::empty;
@@ -84,7 +56,7 @@ struct RegexTree {
         int right = -1;
         int minRepeat = 1;
         int maxRepeat = 1;  // neg means no upper bound.
-        TagTy tag = tag_epsilon;
+        TagTy tag = tagEpsilon;
         CharRangeRef charSupport;
         std::size_t charSupportIdx = 0;
     };

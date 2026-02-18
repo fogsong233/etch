@@ -112,7 +112,7 @@ struct NoopResolver {
     }
 };
 
-template <FixedString Pattern, bool Counting, typename NameResolver, class RegexTree = void>
+template <FixedString Pattern, bool counting, typename NameResolver, class RegexTree = void>
 class ConstexprRegexParser {
     constexpr static std::size_t kPatternSize = Pattern.size();
     constexpr static std::size_t kMaxNameLen = kPatternSize == 0 ? 1 : kPatternSize;
@@ -125,7 +125,7 @@ public:
         bool left;
     };
 
-    using ParseResult = std::conditional_t<Counting, CountResult, RegexTree>;
+    using ParseResult = std::conditional_t<counting, CountResult, RegexTree>;
 
     std::vector<RangeTag> rangeTags_{};
 
@@ -137,7 +137,7 @@ public:
         if(!hasError_ && !eof()) {
             setError(regex::RegexParseError::unexpected_token);
         }
-        if constexpr(!Counting) {
+        if constexpr(!counting) {
             if(!hasError_) {
                 result_.root = root;
             }
@@ -157,7 +157,7 @@ private:
 
     consteval void splitCharRange() {
         if(rangeTags_.empty()) {
-            if constexpr(Counting) {
+            if constexpr(counting) {
                 result_.splitRangeCount = 0;
                 result_.maxOwnRange = 0;
             } else {
@@ -167,14 +167,14 @@ private:
         }
 
         std::size_t ownerCount = 0;
-        if constexpr(Counting) {
+        if constexpr(counting) {
             ownerCount = result_.nodeCount;
         } else {
             ownerCount = static_cast<std::size_t>(result_.size);
         }
 
         if(ownerCount == 0) {
-            if constexpr(Counting) {
+            if constexpr(counting) {
                 result_.splitRangeCount = 0;
                 result_.maxOwnRange = 0;
             } else {
@@ -183,7 +183,7 @@ private:
             return;
         }
 
-        if constexpr(Counting) {
+        if constexpr(counting) {
             result_.splitRangeCount = 0;
             result_.maxOwnRange = 0;
         } else {
@@ -223,7 +223,7 @@ private:
                 return true;
             }
 
-            if constexpr(Counting) {
+            if constexpr(counting) {
                 result_.splitRangeCount += 1;
                 for(const auto ownerIdx: activeOwners) {
                     ownRangeCount[ownerIdx] += 1;
@@ -244,7 +244,7 @@ private:
                         setError(regex::RegexParseError::too_many_nodes);
                         return false;
                     }
-                    node.charSupport[node.charSupportIdx++] = static_cast<CharTy>(splitIdx);
+                    node.charSupport[node.charSupportIdx++] = splitIdx;
                 }
                 return true;
             }
@@ -311,7 +311,7 @@ private:
             return;
         }
 
-        if constexpr(Counting) {
+        if constexpr(counting) {
             result_.maxOwnRange = 0;
             for(const auto rangeCount: ownRangeCount) {
                 if(rangeCount > result_.maxOwnRange) {
@@ -352,7 +352,7 @@ private:
     }
 
     consteval auto newNode(regex::RegexTreeNodeKind kind) -> int {
-        if constexpr(Counting) {
+        if constexpr(counting) {
             const int idx = static_cast<int>(result_.nodeCount++);
             (void)kind;
             return idx;
@@ -411,7 +411,7 @@ private:
 
     consteval auto makeTagNode(TagTy tag) -> int {
         const int idx = newNode(regex::RegexTreeNodeKind::tag);
-        if constexpr(!Counting) {
+        if constexpr(!counting) {
             if(idx >= 0) {
                 result_.nodes[static_cast<std::size_t>(idx)].tag = tag;
             }
@@ -421,7 +421,7 @@ private:
 
     consteval auto makeBinaryNode(regex::RegexTreeNodeKind kind, int lhs, int rhs) -> int {
         const int idx = newNode(kind);
-        if constexpr(!Counting) {
+        if constexpr(!counting) {
             if(idx >= 0) {
                 auto& node = result_.nodes[static_cast<std::size_t>(idx)];
                 node.left = lhs;
@@ -433,7 +433,7 @@ private:
 
     consteval auto makeRepetitionNode(int child, int minRepeat, int maxRepeat) -> int {
         const int idx = newNode(regex::RegexTreeNodeKind::repetition);
-        if constexpr(!Counting) {
+        if constexpr(!counting) {
             if(idx >= 0) {
                 auto& node = result_.nodes[static_cast<std::size_t>(idx)];
                 node.left = child;
@@ -681,7 +681,7 @@ private:
         }
 
         const std::string_view name(nameBuf.data(), nameLen);
-        if constexpr(Counting) {
+        if constexpr(counting) {
             return makeCharCheckNode(nullptr);
         } else {
             const CharFn fn = toCharFn(resolver_(name));
