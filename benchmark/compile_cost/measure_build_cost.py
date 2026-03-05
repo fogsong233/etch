@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import shutil
+import tempfile
 
 TARGETS = [
     ("buildcost_etch_tdfa", "etch_tdfa"),
@@ -44,10 +45,7 @@ def main() -> int:
 
     root = pathlib.Path(__file__).resolve().parents[2]
     env = os.environ.copy()
-    run_root = root / "build" / "buildcost_runs"
-    if run_root.exists():
-        shutil.rmtree(run_root)
-    run_root.mkdir(parents=True, exist_ok=True)
+    run_root = pathlib.Path(tempfile.mkdtemp(prefix="etch-buildcost-"))
 
     print("Build-cost benchmark (clean build, release, ccache disabled)")
     print(f"repeat={args.repeat}")
@@ -55,39 +53,44 @@ def main() -> int:
     print(f"{'engine':<12}{'compile_s(avg)':>16}{'compile_s(min)':>16}{'compile_s(max)':>16}{'binary_bytes':>16}")
     print("-" * 76)
 
-    for target, label in TARGETS:
-        elapsed = []
-        binary_size = None
-        for i in range(args.repeat):
-            buildir = run_root / f"{target}_{i}"
-            if buildir.exists():
-                shutil.rmtree(buildir)
-            buildir.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        for target, label in TARGETS:
+            elapsed = []
+            binary_size = None
+            for i in range(args.repeat):
+                buildir = run_root / f"{target}_{i}"
+                if buildir.exists():
+                    shutil.rmtree(buildir, ignore_errors=True)
+                buildir.parent.mkdir(parents=True, exist_ok=True)
 
-            run(["xmake",
-                 "f",
-                 "-y",
-                 "-m",
-                 "release",
-                 "--benchmark=y",
-                 "--test=n",
-                 "--ccache=n",
-                 f"--builddir={buildir}"],
-                cwd=root,
-                env=env,
-                quiet=args.quiet)
-            t0 = time.perf_counter()
-            run(["xmake", "-y", "-b", target], cwd=root, env=env, quiet=args.quiet)
-            dt = time.perf_counter() - t0
-            elapsed.append(dt)
+                run(["xmake",
+                     "f",
+                     "-y",
+                     "-m",
+                     "release",
+                     "--benchmark=y",
+                     "--test=n",
+                     "--ccache=n",
+                     f"--builddir={buildir}"],
+                    cwd=root,
+                    env=env,
+                    quiet=args.quiet)
+                t0 = time.perf_counter()
+                run(["xmake", "-y", "-b", target], cwd=root, env=env, quiet=args.quiet)
+                dt = time.perf_counter() - t0
+                elapsed.append(dt)
 
-            binary = find_binary(buildir, target)
-            binary_size = binary.stat().st_size
+                binary = find_binary(buildir, target)
+                binary_size = binary.stat().st_size
 
-        avg_t = statistics.mean(elapsed)
-        min_t = min(elapsed)
-        max_t = max(elapsed)
-        print(f"{label:<12}{avg_t:>16.2f}{min_t:>16.2f}{max_t:>16.2f}{binary_size:>16d}")
+            avg_t = statistics.mean(elapsed)
+            min_t = min(elapsed)
+            max_t = max(elapsed)
+            print(f"{label:<12}{avg_t:>16.2f}{min_t:>16.2f}{max_t:>16.2f}{binary_size:>16d}")
+    finally:
+        # Restore default project builddir/config so later normal builds are not polluted.
+        run(["xmake", "f", "-y", "-m", "release", "--benchmark=y", "--test=y"], cwd=root, env=env, quiet=True)
+        shutil.rmtree(run_root, ignore_errors=True)
 
     return 0
 
