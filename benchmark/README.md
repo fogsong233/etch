@@ -15,6 +15,10 @@ This benchmark compares full-match runtime throughput across:
 xmake f -y -m release --benchmark=y
 xmake -y -b regex_benchmark
 xmake -y -b regex_ablation
+xmake -y -b buildcost_etch_tdfa
+xmake -y -b buildcost_etch_tnfa
+xmake -y -b buildcost_ctre
+xmake -y -b buildcost_std_regex
 ```
 
 ## Run
@@ -22,6 +26,7 @@ xmake -y -b regex_ablation
 ```bash
 xmake run regex_benchmark -- <corpus_size> <target_ops_per_case>
 xmake run regex_ablation -- <corpus_size> <target_ops_per_case>
+python3 benchmark/compile_cost/measure_build_cost.py --repeat 3
 ```
 
 Example:
@@ -29,6 +34,7 @@ Example:
 ```bash
 xmake run regex_benchmark -- 2048 800000
 xmake run regex_ablation -- 8192 5000000
+python3 benchmark/compile_cost/measure_build_cost.py --repeat 3 --quiet
 ```
 
 For paper reporting, run each benchmark at least 3 times and report the mean `ns/op`.

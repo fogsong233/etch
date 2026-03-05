@@ -73,4 +73,25 @@ if has_config("benchmark") then
         add_files("benchmark/ablation.cc")
         add_deps("lib")
         add_packages("ctre")
+
+    target("buildcost_etch_tdfa")
+        set_kind("binary")
+        add_files("benchmark/compile_cost/etch_tdfa_build.cc")
+        add_deps("lib")
+
+    target("buildcost_etch_tnfa")
+        set_kind("binary")
+        add_files("benchmark/compile_cost/etch_tnfa_build.cc")
+        add_deps("lib")
+
+    target("buildcost_ctre")
+        set_kind("binary")
+        add_files("benchmark/compile_cost/ctre_build.cc")
+        add_deps("lib")
+        add_packages("ctre")
+
+    target("buildcost_std_regex")
+        set_kind("binary")
+        add_files("benchmark/compile_cost/std_regex_build.cc")
+        add_deps("lib")
 end
