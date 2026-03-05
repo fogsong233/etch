@@ -1639,15 +1639,30 @@ private:
 
     [[nodiscard]] constexpr auto countOperations() const -> std::size_t {
         std::size_t total = 0;
+        std::vector<std::vector<RegOp>> uniqueOps;
+
+        const auto account = [&](const std::vector<RegOp>& ops) {
+            if(ops.empty()) {
+                return;
+            }
+            for(const auto& existed: uniqueOps) {
+                if(equalOps(ops, existed)) {
+                    return;
+                }
+            }
+            uniqueOps.push_back(ops);
+            total += ops.size();
+        };
+
         for(std::size_t s = 0; s < states_.size(); ++s) {
             for(std::size_t c = 0; c < classCount_; ++c) {
                 if(!edgeRef(s, c).enabled) {
                     continue;
                 }
-                total += edgeRef(s, c).ops.size();
+                account(edgeRef(s, c).ops);
             }
             if(states_[s].isFinal) {
-                total += states_[s].finalOps.size();
+                account(states_[s].finalOps);
             }
         }
         return total;
@@ -1909,6 +1924,8 @@ private:
         model.classCount = clampToU16(classCount_);
         model.regCount = clampToU16(regCount_);
         model.tagCount = clampToU16(tagCount_);
+        std::vector<std::vector<RegOp>> uniqueOps;
+        std::vector<OpSlice> uniqueSlices;
         for(std::size_t s = 0; s < states_.size(); ++s) {
             model.byteDelta[s].fill(ModelTy::deadState);
         }
@@ -1936,7 +1953,7 @@ private:
                 if(!edge.enabled) {
                     continue;
                 }
-                const auto slice = appendSlice(model, edge.ops);
+                const auto slice = appendSliceInterned(model, edge.ops, uniqueOps, uniqueSlices);
                 if(buildError_ != TDFAError::none) {
                     return std::nullopt;
                 }
@@ -1951,7 +1968,8 @@ private:
             }
 
             if(states_[s].isFinal) {
-                const auto slice = appendSlice(model, states_[s].finalOps);
+                const auto slice =
+                    appendSliceInterned(model, states_[s].finalOps, uniqueOps, uniqueSlices);
                 if(buildError_ != TDFAError::none) {
                     return std::nullopt;
                 }
@@ -1980,7 +1998,7 @@ private:
     [[nodiscard]] constexpr auto appendSlice(ModelTy& model, const std::vector<RegOp>& ops)
         -> OpSlice {
         if(ops.empty()) {
-            return OpSlice{model.opPoolIdx, 0};
+            return OpSlice{0, 0};
         }
 
         if(model.opPoolIdx + ops.size() > model.opPool.size()) {
@@ -1998,6 +2016,29 @@ private:
         }
 
         return OpSlice{off, static_cast<uint16_t>(ops.size())};
+    }
+
+    [[nodiscard]] constexpr auto appendSliceInterned(ModelTy& model,
+                                                     const std::vector<RegOp>& ops,
+                                                     std::vector<std::vector<RegOp>>& uniqueOps,
+                                                     std::vector<OpSlice>& uniqueSlices) -> OpSlice {
+        if(ops.empty()) {
+            return OpSlice{0, 0};
+        }
+
+        for(std::size_t i = 0; i < uniqueOps.size(); ++i) {
+            if(equalOps(ops, uniqueOps[i])) {
+                return uniqueSlices[i];
+            }
+        }
+
+        const auto slice = appendSlice(model, ops);
+        if(buildError_ != TDFAError::none) {
+            return {};
+        }
+        uniqueOps.push_back(ops);
+        uniqueSlices.push_back(slice);
+        return slice;
     }
 
 private:
