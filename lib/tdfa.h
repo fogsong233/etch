@@ -112,6 +112,10 @@ template <typename TNFAModelTy,
           std::size_t NewStateN = 0,
           std::size_t OpN = 0,
           std::size_t TagN = 0,
+          bool EnableRegOptimize = true,
+          bool EnableStateMinimize = true,
+          bool EnableLengthPrune = true,
+          bool EnableExactLiteralFastpath = true,
           auto DeltaRecord = eventide::comptime::counting_flag<1>>
 class Builder {
     using TNFADataTy = std::remove_cvref_t<TNFAModelTy>;
@@ -380,11 +384,15 @@ private:
     };
 
     [[nodiscard]] constexpr auto optimize() -> bool {
-        if(!optimizeRegisters()) {
-            return false;
+        if constexpr(EnableRegOptimize) {
+            if(!optimizeRegisters()) {
+                return false;
+            }
         }
-        if(!minimizeStates()) {
-            return false;
+        if constexpr(EnableStateMinimize) {
+            if(!minimizeStates()) {
+                return false;
+            }
         }
         return true;
     }
@@ -1951,8 +1959,19 @@ private:
             }
         }
 
-        computeLengthBounds(model);
-        computeExactLiteral(model);
+        if constexpr(EnableLengthPrune) {
+            computeLengthBounds(model);
+        } else {
+            model.minInputLen = 0;
+            model.maxInputLen = std::numeric_limits<uint32_t>::max();
+        }
+
+        if constexpr(EnableExactLiteralFastpath && EnableLengthPrune) {
+            computeExactLiteral(model);
+        } else {
+            model.isExactLiteral = false;
+            model.literalLen = 0;
+        }
 
         model.error = buildError_;
         return model;
@@ -2005,22 +2024,50 @@ template <typename TNFAModelTy,
           std::size_t StateN,
           std::size_t RegN,
           std::size_t OpN,
-          std::size_t TagN>
+          std::size_t TagN,
+          bool EnableRegOptimize = true,
+          bool EnableStateMinimize = true,
+          bool EnableLengthPrune = true,
+          bool EnableExactLiteralFastpath = true>
 [[nodiscard]] constexpr auto fromTNFA(const TNFAModelTy& tnfaModel)
     -> std::optional<TDFAModel<StateN,
                                detail::TNFATraits<std::remove_cvref_t<TNFAModelTy>>::kMaxSplitRange,
                                RegN,
                                OpN,
                                TagN>> {
-    Builder<TNFAModelTy, false, RegN, StateN, OpN, TagN> builder(tnfaModel);
+    Builder<TNFAModelTy,
+            false,
+            RegN,
+            StateN,
+            OpN,
+            TagN,
+            EnableRegOptimize,
+            EnableStateMinimize,
+            EnableLengthPrune,
+            EnableExactLiteralFastpath>
+        builder(tnfaModel);
     return builder.build();
 }
 
-template <auto tnfaModel>
-[[nodiscard]] consteval auto fromTNFAAuto() {
+template <auto tnfaModel,
+          bool EnableRegOptimize = true,
+          bool EnableStateMinimize = true,
+          bool EnableLengthPrune = true,
+          bool EnableExactLiteralFastpath = true>
+[[nodiscard]] consteval auto fromTNFAAutoTuned() {
     using TNFAModelTy = std::remove_cvref_t<decltype(tnfaModel)>;
     constexpr auto meta = []() consteval {
-        Builder<TNFAModelTy, true> builder(tnfaModel);
+        Builder<TNFAModelTy,
+                true,
+                0,
+                0,
+                0,
+                0,
+                EnableRegOptimize,
+                EnableStateMinimize,
+                EnableLengthPrune,
+                EnableExactLiteralFastpath>
+            builder(tnfaModel);
         const auto counting = builder.build();
         return std::pair{counting, builder.genDeltaRecord()};
     }();
@@ -2034,8 +2081,24 @@ template <auto tnfaModel>
     constexpr auto opN = counting.opN == 0 ? 1u : static_cast<unsigned>(counting.opN);
     constexpr auto tagN = tagNRaw == 0 ? 1u : static_cast<unsigned>(tagNRaw);
 
-    Builder<TNFAModelTy, false, regN, stateN, opN, tagN, deltaRecord> builder(tnfaModel);
+    Builder<TNFAModelTy,
+            false,
+            regN,
+            stateN,
+            opN,
+            tagN,
+            EnableRegOptimize,
+            EnableStateMinimize,
+            EnableLengthPrune,
+            EnableExactLiteralFastpath,
+            deltaRecord>
+        builder(tnfaModel);
     return builder.build();
+}
+
+template <auto tnfaModel>
+[[nodiscard]] consteval auto fromTNFAAuto() {
+    return fromTNFAAutoTuned<tnfaModel>();
 }
 
 template <std::size_t MaxStates,

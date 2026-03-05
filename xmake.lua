@@ -64,7 +64,13 @@ end
 if has_config("benchmark") then
     target("regex_benchmark")
         set_kind("binary")
-        add_files("benchmark/*.cc")
+        add_files("benchmark/main.cc")
+        add_deps("lib")
+        add_packages("ctre")
+
+    target("regex_ablation")
+        set_kind("binary")
+        add_files("benchmark/ablation.cc")
         add_deps("lib")
         add_packages("ctre")
 end
