@@ -218,15 +218,15 @@ void printHeader(uint64_t corpusSize, uint64_t targetOps) {
 
 void printModelStatsHeader() {
     std::cout << "Model ablation (compile-time materialized model size)\n";
-    std::cout << std::left << std::setw(18) << "case" << std::setw(24) << "variant"
+    std::cout << std::left << std::setw(24) << "case" << std::setw(24) << "variant"
               << std::setw(10) << "states" << std::setw(10) << "regs" << std::setw(10) << "ops"
               << std::setw(10) << "classes" << std::setw(10) << "minLen" << std::setw(12)
               << "maxLen" << std::setw(10) << "exactLit" << '\n';
-    std::cout << std::string(106, '-') << '\n';
+    std::cout << std::string(112, '-') << '\n';
 }
 
 void printModelStatLine(std::string_view caseName, std::string_view variant, const ModelStats& s) {
-    std::cout << std::left << std::setw(18) << caseName << std::setw(24) << variant
+    std::cout << std::left << std::setw(24) << caseName << std::setw(24) << variant
               << std::setw(10) << s.states << std::setw(10) << s.regs << std::setw(10) << s.ops
               << std::setw(10) << s.classes << std::setw(10) << s.minLen << std::setw(12)
               << s.maxLen << std::setw(10) << (s.exactLiteral ? "yes" : "no") << '\n';
@@ -366,6 +366,33 @@ int main(int argc, char** argv) {
                     EngineDef{"etch_tnfa", &matchTNFA<etch::FixedString{R"(\w+\.(jpg|png|gif))"}>},
                 },
                 makeCorpus(corpusSize, 4, 24, 23, {"photo.jpg", "icon.png", "anim.gif", "photo.bmp"})},
+        CaseDef{"iso_datetime_tz_long",
+                {
+                    EngineDef{"etch_tdfa_full",
+                              &matchTDFAFull<etch::FixedString{
+                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
+                    EngineDef{"etch_tdfa_no_regopt",
+                              &matchTDFANoRegOptimize<etch::FixedString{
+                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
+                    EngineDef{"etch_tdfa_no_state_min",
+                              &matchTDFANoStateMinimize<etch::FixedString{
+                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
+                    EngineDef{"etch_tdfa_no_fastpath",
+                              &matchTDFANoFastpath<etch::FixedString{
+                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
+                    EngineDef{"etch_tnfa",
+                              &matchTNFA<etch::FixedString{
+                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
+                },
+                makeCorpus(corpusSize,
+                           12,
+                           40,
+                           47,
+                           {"2024-12-31T23:59:59Z",
+                            "1999-01-01T00:00:00+08:00",
+                            "2030-06-15T12:30:45-05:30",
+                            "2024-12-31 23:59:59Z",
+                            "2024-12-31T23:59Z"})},
         CaseDef{"tag_plus",
                 {
                     EngineDef{"etch_tdfa_full",
@@ -417,6 +444,10 @@ int main(int argc, char** argv) {
     printPatternModelStats<etch::FixedString{R"(\d{4}-\d{2}-\d{2})"}>("iso_date");
     printPatternModelStats<etch::FixedString{R"(\w+/\w+(\.\w+)?)"}>("path_opt_ext");
     printPatternModelStats<etch::FixedString{R"(\w+\.(jpg|png|gif))"}>("image_ext");
+    printPatternModelStats<
+        etch::FixedString{
+            R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>(
+        "iso_datetime_tz_long");
     printPatternModelStats<etch::FixedString{R"((\g{0}a)+)"}>("tag_plus");
     printPatternModelStats<etch::FixedString{R"(\g{0}ab|a)"}>("tag_alt_reset");
     printPatternModelStats<etch::FixedString{R"((\g{0}ab){2,3})"}>("tag_repeat_range");

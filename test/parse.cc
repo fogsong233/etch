@@ -39,6 +39,11 @@ void registerParseTests() {
         expectFixtureParseOk<testdata::RegexCaseId::us_phone>();
         expectFixtureParseOk<testdata::RegexCaseId::path_optional_ext>();
         expectFixtureParseOk<testdata::RegexCaseId::image_ext>();
+        expectFixtureParseOk<testdata::RegexCaseId::semver_long>();
+        expectFixtureParseOk<testdata::RegexCaseId::url_auth_path_query_long>();
+        expectFixtureParseOk<testdata::RegexCaseId::iso_datetime_tz_long>();
+        expectFixtureParseOk<testdata::RegexCaseId::ipv4_endpoint_long>();
+        expectFixtureParseOk<testdata::RegexCaseId::log_line_long>();
     };
 
     "regex_tree_parse_tag_patterns"_test = [] {
@@ -48,6 +53,7 @@ void registerParseTests() {
         expectFixtureParseOk<testdata::RegexCaseId::tag_star>();
         expectFixtureParseOk<testdata::RegexCaseId::tag_plus>();
         expectFixtureParseOk<testdata::RegexCaseId::tag_repeat_range>();
+        expectFixtureParseOk<testdata::RegexCaseId::tag_http_request_long>();
     };
 
     "regex_tree_parse_errors"_test = [] {

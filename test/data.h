@@ -47,6 +47,12 @@ enum class RegexCaseId : std::size_t {
     tag_star,
     tag_plus,
     tag_repeat_range,
+    semver_long,
+    url_auth_path_query_long,
+    iso_datetime_tz_long,
+    ipv4_endpoint_long,
+    log_line_long,
+    tag_http_request_long,
 };
 
 enum class ParseErrorCaseId : std::size_t {
@@ -121,6 +127,41 @@ struct RegexPattern<RegexCaseId::tag_plus> {
 template <>
 struct RegexPattern<RegexCaseId::tag_repeat_range> {
     constexpr static auto value = FixedString{R"((\g{0}ab){2,3})"};
+};
+
+template <>
+struct RegexPattern<RegexCaseId::semver_long> {
+    constexpr static auto value =
+        FixedString{R"((v)?\d{1,3}\.\d{1,3}\.\d{1,3}(-\w+(\.\w+)*)?(\+\w+(\.\w+)*)?)"};
+};
+
+template <>
+struct RegexPattern<RegexCaseId::url_auth_path_query_long> {
+    constexpr static auto value = FixedString{
+        R"((https?|ftp)://(\w+(:\w+)?@)?(\w+\.)+\w+(:\d{2,5})?(/\w+)*(\?\w+=\w+(&\w+=\w+)*)?)"};
+};
+
+template <>
+struct RegexPattern<RegexCaseId::iso_datetime_tz_long> {
+    constexpr static auto value =
+        FixedString{R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"};
+};
+
+template <>
+struct RegexPattern<RegexCaseId::ipv4_endpoint_long> {
+    constexpr static auto value = FixedString{R"((\d{1,3}\.){3}\d{1,3}(:\d{2,5})?(/\w+)*)"};
+};
+
+template <>
+struct RegexPattern<RegexCaseId::log_line_long> {
+    constexpr static auto value =
+        FixedString{R"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (INFO|WARN|ERROR|DEBUG) \w+( \w+)*)"};
+};
+
+template <>
+struct RegexPattern<RegexCaseId::tag_http_request_long> {
+    constexpr static auto value = FixedString{
+        R"((GET|POST|PUT|DELETE) \g{0}(/\w+)+(\?\w+=\w+(&\w+=\w+)*)?)"};
 };
 
 template <RegexCaseId Id>
@@ -318,6 +359,80 @@ constexpr inline std::array kTagRangeStrings{
     RegexStringCase{"abababab", false, spanOf(kNoTags)           },
 };
 
+constexpr inline std::array kSemverLongStrings{
+    RegexStringCase{"v1.2.3",                 true,  spanOf(kNoTags)},
+    RegexStringCase{"1.20.300-alpha.1",       true,  spanOf(kNoTags)},
+    RegexStringCase{"2.7.15+build_42",        true,  spanOf(kNoTags)},
+    RegexStringCase{"v10.0.1-rc2+meta.data",  true,  spanOf(kNoTags)},
+    RegexStringCase{"1.2",                    false, spanOf(kNoTags)},
+    RegexStringCase{"v1.2.3+",                false, spanOf(kNoTags)},
+    RegexStringCase{"1.2.3-",                 false, spanOf(kNoTags)},
+    RegexStringCase{"version1.2.3",           false, spanOf(kNoTags)},
+};
+
+constexpr inline std::array kUrlAuthPathQueryLongStrings{
+    RegexStringCase{"https://api.test.com", true, spanOf(kNoTags)},
+    RegexStringCase{"http://user:pw@host.example.org:8080/path_v1/file_txt",
+                    true,
+                    spanOf(kNoTags)},
+    RegexStringCase{"ftp://mirror.server.net/downloads/pkg_1_2_3", true, spanOf(kNoTags)},
+    RegexStringCase{"https://a.b.io/p/q?r=s&t=u", true, spanOf(kNoTags)},
+    RegexStringCase{"https:/broken.com", false, spanOf(kNoTags)},
+    RegexStringCase{"http://host", false, spanOf(kNoTags)},
+    RegexStringCase{"http://a..com", false, spanOf(kNoTags)},
+    RegexStringCase{"https://host.com/path?", false, spanOf(kNoTags)},
+};
+
+constexpr inline std::array kIsoDatetimeTzLongStrings{
+    RegexStringCase{"2024-12-31T23:59:59Z",      true,  spanOf(kNoTags)},
+    RegexStringCase{"1999-01-01T00:00:00+08:00", true,  spanOf(kNoTags)},
+    RegexStringCase{"2030-06-15T12:30:45-05:30", true,  spanOf(kNoTags)},
+    RegexStringCase{"2024-12-31 23:59:59Z",      false, spanOf(kNoTags)},
+    RegexStringCase{"2024-12-31T23:59Z",         false, spanOf(kNoTags)},
+    RegexStringCase{"2024-12-31T23:59:59+8:00",  false, spanOf(kNoTags)},
+    RegexStringCase{"2024/12/31T23:59:59Z",      false, spanOf(kNoTags)},
+};
+
+constexpr inline std::array kIpv4EndpointLongStrings{
+    RegexStringCase{"127.0.0.1",                 true,  spanOf(kNoTags)},
+    RegexStringCase{"10.20.30.40:8080",          true,  spanOf(kNoTags)},
+    RegexStringCase{"192.168.1.10/api/v1/status", true,  spanOf(kNoTags)},
+    RegexStringCase{"8.8.8.8:53/dns_query",      true,  spanOf(kNoTags)},
+    RegexStringCase{"127.0.0",                   false, spanOf(kNoTags)},
+    RegexStringCase{"127.0.0.1:",                false, spanOf(kNoTags)},
+    RegexStringCase{"127.0.0.1:/path",           false, spanOf(kNoTags)},
+    RegexStringCase{"127.0.0.1/path//x",         false, spanOf(kNoTags)},
+};
+
+constexpr inline std::array kLogLineLongStrings{
+    RegexStringCase{"2025-03-01 09:10:11 INFO service_start ok", true, spanOf(kNoTags)},
+    RegexStringCase{"2025-03-01 09:10:11 ERROR db_conn timeout", true, spanOf(kNoTags)},
+    RegexStringCase{"2025-03-01 09:10:11 DEBUG worker_1 step2", true, spanOf(kNoTags)},
+    RegexStringCase{"2025-03-01T09:10:11 INFO service_start", false, spanOf(kNoTags)},
+    RegexStringCase{"2025-03-01 09:10 INFO short_time", false, spanOf(kNoTags)},
+    RegexStringCase{"2025-03-01 09:10:11 TRACE unknown_level", false, spanOf(kNoTags)},
+    RegexStringCase{"2025-03-01 09:10:11 INFO ", false, spanOf(kNoTags)},
+};
+
+constexpr inline std::array kTagHttpRequestLongMapGet{
+    TagIndex{0, 5},
+};
+constexpr inline std::array kTagHttpRequestLongMapPost{
+    TagIndex{0, 6},
+};
+constexpr inline std::array kTagHttpRequestLongMapDelete{
+    TagIndex{0, 8},
+};
+constexpr inline std::array kTagHttpRequestLongStrings{
+    RegexStringCase{"GET /api/v1/users",                 true,  spanOf(kTagHttpRequestLongMapGet)   },
+    RegexStringCase{"POST /submit/form?id=42&mode=fast", true,  spanOf(kTagHttpRequestLongMapPost)  },
+    RegexStringCase{"DELETE /cache/item_1",              true,  spanOf(kTagHttpRequestLongMapDelete)},
+    RegexStringCase{"PATCH /api/v1/users",               false, spanOf(kNoTags)                     },
+    RegexStringCase{"GET/api/v1/users",                  false, spanOf(kNoTags)                     },
+    RegexStringCase{"GET /api/v1/users?",                false, spanOf(kNoTags)                     },
+    RegexStringCase{"GET /",                             false, spanOf(kNoTags)                     },
+};
+
 constexpr inline std::array kRegexFixtures{
     RegexFixture{"literal",            regexPatternView<RegexCaseId::literal>(),   spanOf(kLiteralStrings) },
     RegexFixture{"email_like",
@@ -341,6 +456,24 @@ constexpr inline std::array kRegexFixtures{
     RegexFixture{"tag_repeat_range",
                  regexPatternView<RegexCaseId::tag_repeat_range>(),
                  spanOf(kTagRangeStrings)                                                                  },
+    RegexFixture{"semver_long",
+                 regexPatternView<RegexCaseId::semver_long>(),
+                 spanOf(kSemverLongStrings)                                                                },
+    RegexFixture{"url_auth_path_query_long",
+                 regexPatternView<RegexCaseId::url_auth_path_query_long>(),
+                 spanOf(kUrlAuthPathQueryLongStrings)                                                      },
+    RegexFixture{"iso_datetime_tz_long",
+                 regexPatternView<RegexCaseId::iso_datetime_tz_long>(),
+                 spanOf(kIsoDatetimeTzLongStrings)                                                         },
+    RegexFixture{"ipv4_endpoint_long",
+                 regexPatternView<RegexCaseId::ipv4_endpoint_long>(),
+                 spanOf(kIpv4EndpointLongStrings)                                                          },
+    RegexFixture{"log_line_long",
+                 regexPatternView<RegexCaseId::log_line_long>(),
+                 spanOf(kLogLineLongStrings)                                                               },
+    RegexFixture{"tag_http_request_long",
+                 regexPatternView<RegexCaseId::tag_http_request_long>(),
+                 spanOf(kTagHttpRequestLongStrings)                                                        },
 };
 
 constexpr inline std::array kParseErrorFixtures{

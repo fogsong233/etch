@@ -84,6 +84,8 @@ void registerTdfaTests() {
         expectFixtureRuntime<testdata::RegexCaseId::us_phone>();
         expectFixtureRuntime<testdata::RegexCaseId::path_optional_ext>();
         expectFixtureRuntime<testdata::RegexCaseId::image_ext>();
+        expectFixtureRuntime<testdata::RegexCaseId::semver_long>();
+        expectFixtureRuntime<testdata::RegexCaseId::iso_datetime_tz_long>();
     };
 
     "tdfa_runtime_tag_patterns"_test = [] {
@@ -119,6 +121,8 @@ void registerTdfaTests() {
         expectSameAsTnfa<testdata::RegexCaseId::us_phone>();
         expectSameAsTnfa<testdata::RegexCaseId::path_optional_ext>();
         expectSameAsTnfa<testdata::RegexCaseId::image_ext>();
+        expectSameAsTnfa<testdata::RegexCaseId::semver_long>();
+        expectSameAsTnfa<testdata::RegexCaseId::iso_datetime_tz_long>();
         expectSameAsTnfa<testdata::RegexCaseId::tag_basic>();
         expectSameAsTnfa<testdata::RegexCaseId::tag_alt_reset>();
         expectSameAsTnfa<testdata::RegexCaseId::tag_optional_reset>();

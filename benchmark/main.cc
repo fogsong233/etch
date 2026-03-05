@@ -74,6 +74,11 @@ auto matchCtreImage(std::string_view input) -> bool {
     return static_cast<bool>(ctre::match<R"(\w+\.(jpg|png|gif))">(input));
 }
 
+auto matchCtreIsoDatetimeTzLong(std::string_view input) -> bool {
+    return static_cast<bool>(ctre::match<
+        R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))">(input));
+}
+
 auto matchStdRegex(std::string_view input, const std::regex& pattern) -> bool {
     return std::regex_match(input.begin(), input.end(), pattern);
 }
@@ -109,6 +114,13 @@ auto matchStdImage(std::string_view input) -> bool {
     static const auto re = std::regex{R"(\w+\.(jpg|png|gif))",
                                       std::regex_constants::ECMAScript |
                                           std::regex_constants::optimize};
+    return matchStdRegex(input, re);
+}
+
+auto matchStdIsoDatetimeTzLong(std::string_view input) -> bool {
+    static const auto re = std::regex{
+        R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))",
+        std::regex_constants::ECMAScript | std::regex_constants::optimize};
     return matchStdRegex(input, re);
 }
 
@@ -300,6 +312,24 @@ int main(int argc, char** argv) {
                 &matchCtreImage,
                 &matchStdImage,
                 makeCorpus(corpusSize, 4, 24, 23, {"photo.jpg", "icon.png", "anim.gif", "photo.bmp"})},
+        CaseDef{"iso_datetime_tz_long",
+                &matchEtchTNFA<
+                    etch::FixedString{
+                        R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>,
+                &matchEtchTDFA<
+                    etch::FixedString{
+                        R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>,
+                &matchCtreIsoDatetimeTzLong,
+                &matchStdIsoDatetimeTzLong,
+                makeCorpus(corpusSize,
+                           12,
+                           40,
+                           47,
+                           {"2024-12-31T23:59:59Z",
+                            "1999-01-01T00:00:00+08:00",
+                            "2030-06-15T12:30:45-05:30",
+                            "2024-12-31 23:59:59Z",
+                            "2024-12-31T23:59Z"})},
     };
 
     printHeader(corpusSize, targetOps);
