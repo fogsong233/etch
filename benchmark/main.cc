@@ -13,6 +13,7 @@
 #include <iostream>
 #include <limits>
 #include <random>
+#include <regex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -71,6 +72,44 @@ auto matchCtrePath(std::string_view input) -> bool {
 
 auto matchCtreImage(std::string_view input) -> bool {
     return static_cast<bool>(ctre::match<R"(\w+\.(jpg|png|gif))">(input));
+}
+
+auto matchStdRegex(std::string_view input, const std::regex& pattern) -> bool {
+    return std::regex_match(input.begin(), input.end(), pattern);
+}
+
+auto matchStdLiteral(std::string_view input) -> bool {
+    static const auto re =
+        std::regex{R"(abc)", std::regex_constants::ECMAScript | std::regex_constants::optimize};
+    return matchStdRegex(input, re);
+}
+
+auto matchStdEmail(std::string_view input) -> bool {
+    static const auto re = std::regex{R"(\w+@\w+\.\w+)",
+                                      std::regex_constants::ECMAScript |
+                                          std::regex_constants::optimize};
+    return matchStdRegex(input, re);
+}
+
+auto matchStdDate(std::string_view input) -> bool {
+    static const auto re = std::regex{R"(\d{4}-\d{2}-\d{2})",
+                                      std::regex_constants::ECMAScript |
+                                          std::regex_constants::optimize};
+    return matchStdRegex(input, re);
+}
+
+auto matchStdPath(std::string_view input) -> bool {
+    static const auto re = std::regex{R"(\w+/\w+(\.\w+)?)",
+                                      std::regex_constants::ECMAScript |
+                                          std::regex_constants::optimize};
+    return matchStdRegex(input, re);
+}
+
+auto matchStdImage(std::string_view input) -> bool {
+    static const auto re = std::regex{R"(\w+\.(jpg|png|gif))",
+                                      std::regex_constants::ECMAScript |
+                                          std::regex_constants::optimize};
+    return matchStdRegex(input, re);
 }
 
 auto makeRandomCorpus(std::size_t count, std::size_t minLen, std::size_t maxLen, uint32_t seed)
@@ -156,6 +195,7 @@ struct CaseDef {
     MatchFn etchTnfa{};
     MatchFn etchTdfa{};
     MatchFn ctre{};
+    MatchFn stdRegex{};
     std::vector<std::string> corpus{};
 };
 
@@ -172,7 +212,7 @@ auto parseU64(const char* s, uint64_t fallback) -> uint64_t {
 }
 
 void printHeader(uint64_t corpusSize, uint64_t targetOps) {
-    std::cout << "Regex benchmark (Etch TNFA vs Etch TDFA vs CTRE)\n";
+    std::cout << "Regex benchmark (Etch TNFA vs Etch TDFA vs CTRE vs std::regex)\n";
     std::cout << "corpus_size=" << corpusSize << ", target_ops_per_case~" << targetOps << "\n\n";
     std::cout << std::left << std::setw(22) << "case" << std::setw(12) << "engine" << std::setw(12)
               << "ns/op" << std::setw(12) << "Mops/s" << std::setw(14) << "matched" << std::setw(12)
@@ -194,14 +234,17 @@ void runCase(const CaseDef& c, uint64_t targetOps) {
     (void)runBenchmark(c.etchTnfa, c.corpus, 1);
     (void)runBenchmark(c.etchTdfa, c.corpus, 1);
     (void)runBenchmark(c.ctre, c.corpus, 1);
+    (void)runBenchmark(c.stdRegex, c.corpus, 1);
 
     const auto etchTnfa = runBenchmark(c.etchTnfa, c.corpus, rounds);
     const auto etchTdfa = runBenchmark(c.etchTdfa, c.corpus, rounds);
     const auto ctre = runBenchmark(c.ctre, c.corpus, rounds);
+    const auto stdRegex = runBenchmark(c.stdRegex, c.corpus, rounds);
 
     printLine(c.name, "etch_tnfa", etchTnfa);
     printLine(c.name, "etch_tdfa", etchTdfa);
     printLine(c.name, "ctre", ctre);
+    printLine(c.name, "std_regex", stdRegex);
 }
 
 }  // namespace etch::benchmark
@@ -223,11 +266,13 @@ int main(int argc, char** argv) {
                 &matchEtchTNFA<etch::FixedString{"abc"}>,
                 &matchEtchTDFA<etch::FixedString{"abc"}>,
                 &matchCtreLiteral,
+                &matchStdLiteral,
                 makeCorpus(corpusSize, 1, 12, 11, {"abc", "ab", "abcd", "zzzabc"})},
         CaseDef{"email_like",
                 &matchEtchTNFA<etch::FixedString{R"(\w+@\w+\.\w+)"}>,
                 &matchEtchTDFA<etch::FixedString{R"(\w+@\w+\.\w+)"}>,
                 &matchCtreEmail,
+                &matchStdEmail,
                 makeCorpus(corpusSize,
                            4,
                            36,
@@ -237,6 +282,7 @@ int main(int argc, char** argv) {
                 &matchEtchTNFA<etch::FixedString{R"(\d{4}-\d{2}-\d{2})"}>,
                 &matchEtchTDFA<etch::FixedString{R"(\d{4}-\d{2}-\d{2})"}>,
                 &matchCtreDate,
+                &matchStdDate,
                 makeCorpus(corpusSize,
                            6,
                            14,
@@ -246,11 +292,13 @@ int main(int argc, char** argv) {
                 &matchEtchTNFA<etch::FixedString{R"(\w+/\w+(\.\w+)?)"}>,
                 &matchEtchTDFA<etch::FixedString{R"(\w+/\w+(\.\w+)?)"}>,
                 &matchCtrePath,
+                &matchStdPath,
                 makeCorpus(corpusSize, 4, 24, 19, {"src/main.cc", "src/main", "src/", "/main.cc"})},
         CaseDef{"image_ext",
                 &matchEtchTNFA<etch::FixedString{R"(\w+\.(jpg|png|gif))"}>,
                 &matchEtchTDFA<etch::FixedString{R"(\w+\.(jpg|png|gif))"}>,
                 &matchCtreImage,
+                &matchStdImage,
                 makeCorpus(corpusSize, 4, 24, 23, {"photo.jpg", "icon.png", "anim.gif", "photo.bmp"})},
     };
 

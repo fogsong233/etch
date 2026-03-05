@@ -1,5 +1,6 @@
 #pragma once
 
+#include "comptime.h"
 #include "tnfa.h"
 #include "ty.h"
 
@@ -110,7 +111,8 @@ template <typename TNFAModelTy,
           std::size_t RegN = 0,
           std::size_t NewStateN = 0,
           std::size_t OpN = 0,
-          std::size_t TagN = 0>
+          std::size_t TagN = 0,
+          auto DeltaRecord = eventide::comptime::counting_flag<1>>
 class Builder {
     using TNFADataTy = std::remove_cvref_t<TNFAModelTy>;
     using Traits = detail::TNFATraits<TNFADataTy>;
@@ -164,9 +166,12 @@ class Builder {
 private:
     using ModelTy = TDFAModel<kStateCap, kCharRangeCap, kRegCap, kOpCap, kTagCap>;
     using BuildResult = std::conditional_t<counting, TDFACounting, std::optional<ModelTy>>;
+    using DeltaResourceTy = eventide::comptime::ComptimeMemoryResource<DeltaRecord>;
+    using DeltaPoolTy = eventide::comptime::ComptimeVector<TempEdge, DeltaResourceTy, 0>;
 
 public:
-    constexpr explicit Builder(const TNFAModelTy& tnfaModel) : tnfaModel_(tnfaModel) {}
+    constexpr explicit Builder(const TNFAModelTy& tnfaModel) :
+        tnfaModel_(tnfaModel), delta_(deltaResource_) {}
 
     constexpr auto build() -> BuildResult {
         reset();
@@ -190,6 +195,11 @@ public:
         return buildError_ == TDFAError::none;
     }
 
+    [[nodiscard]] consteval auto genDeltaRecord() const {
+        static_assert(counting, "delta record is only available in counting mode");
+        return deltaResource_.gen_record();
+    }
+
 private:
     constexpr auto setError(TDFAError err) -> bool {
         if(buildError_ == TDFAError::none) {
@@ -208,6 +218,10 @@ private:
         startState_ = 0;
         states_.clear();
         delta_.clear();
+        deltaPeak_ = 0;
+        if constexpr(counting) {
+            deltaResource_.set_reserved(0, 0);
+        }
         finalRegOfTag_.clear();
         counting_ = {};
     }
@@ -320,12 +334,37 @@ private:
                     return false;
                 }
 
-                delta_[s][classId].to = to;
-                delta_[s][classId].ops = std::move(ops);
-                delta_[s][classId].enabled = true;
+                auto& edge = edgeRef(s, classId);
+                edge.to = to;
+                edge.ops = std::move(ops);
+                edge.enabled = true;
             }
         }
         return true;
+    }
+
+    [[nodiscard]] constexpr auto deltaOffset(std::size_t state, std::size_t classId) const
+        -> std::size_t {
+        return state * classCount_ + classId;
+    }
+
+    [[nodiscard]] constexpr auto edgeRef(std::size_t state, std::size_t classId) -> TempEdge& {
+        return delta_[deltaOffset(state, classId)];
+    }
+
+    [[nodiscard]] constexpr auto edgeRef(std::size_t state, std::size_t classId) const
+        -> const TempEdge& {
+        return delta_[deltaOffset(state, classId)];
+    }
+
+    constexpr void pushDeltaEdge(TempEdge edge = {}) {
+        delta_.push_back(std::move(edge));
+        if constexpr(counting) {
+            if(delta_.size() > deltaPeak_) {
+                deltaPeak_ = delta_.size();
+            }
+            deltaResource_.set_reserved(0, deltaPeak_);
+        }
     }
 
     struct BlockRef {
@@ -376,14 +415,14 @@ private:
         if(ref.isFinal) {
             return states_[ref.state].finalOps;
         }
-        return delta_[ref.state][ref.classId].ops;
+        return edgeRef(ref.state, ref.classId).ops;
     }
 
     [[nodiscard]] constexpr auto getOpsConst(const BlockRef& ref) const -> const std::vector<RegOp>& {
         if(ref.isFinal) {
             return states_[ref.state].finalOps;
         }
-        return delta_[ref.state][ref.classId].ops;
+        return edgeRef(ref.state, ref.classId).ops;
     }
 
     constexpr void computeUseDef(const std::vector<RegOp>& ops,
@@ -431,16 +470,18 @@ private:
 
         constexpr auto kInvalidIdx = std::numeric_limits<std::size_t>::max();
 
-        std::vector<std::vector<std::size_t>> edgeBlockIdx(
-            states_.size(), std::vector<std::size_t>(classCount_, kInvalidIdx));
+        std::vector<std::size_t> edgeBlockIdx(states_.size() * classCount_, kInvalidIdx);
         std::vector<std::size_t> finalBlockIdx(states_.size(), kInvalidIdx);
+        const auto edgeBlockOffset = [&](std::size_t state, std::size_t classId) -> std::size_t {
+            return state * classCount_ + classId;
+        };
 
         for(std::size_t s = 0; s < states_.size(); ++s) {
             for(std::size_t c = 0; c < classCount_; ++c) {
-                if(!delta_[s][c].enabled) {
+                if(!edgeRef(s, c).enabled) {
                     continue;
                 }
-                edgeBlockIdx[s][c] = out.blocks.size();
+                edgeBlockIdx[edgeBlockOffset(s, c)] = out.blocks.size();
                 out.blocks.push_back(BlockRef{false, s, c});
             }
             if(states_[s].isFinal) {
@@ -476,12 +517,12 @@ private:
                 continue;
             }
 
-            const auto to = delta_[br.state][br.classId].to;
+            const auto to = edgeRef(br.state, br.classId).to;
             if(to >= states_.size()) {
                 return false;
             }
             for(std::size_t c = 0; c < classCount_; ++c) {
-                const auto nb = edgeBlockIdx[to][c];
+                const auto nb = edgeBlockIdx[edgeBlockOffset(to, c)];
                 if(nb != kInvalidIdx) {
                     succ[b].push_back(nb);
                 }
@@ -739,8 +780,9 @@ private:
             return true;
         }
 
-        for(auto& edges: delta_) {
-            for(auto& edge: edges) {
+        for(std::size_t s = 0; s < states_.size(); ++s) {
+            for(std::size_t c = 0; c < classCount_; ++c) {
+                auto& edge = edgeRef(s, c);
                 if(!edge.enabled) {
                     continue;
                 }
@@ -798,8 +840,9 @@ private:
         }
 
         std::vector<unsigned char> used(regCount_ + 1, 0);
-        for(const auto& edges: delta_) {
-            for(const auto& edge: edges) {
+        for(std::size_t s = 0; s < states_.size(); ++s) {
+            for(std::size_t c = 0; c < classCount_; ++c) {
+                const auto& edge = edgeRef(s, c);
                 if(!edge.enabled) {
                     continue;
                 }
@@ -844,8 +887,9 @@ private:
             remap[r] = static_cast<RegisterId>(newCount);
         }
 
-        for(auto& edges: delta_) {
-            for(auto& edge: edges) {
+        for(std::size_t s = 0; s < states_.size(); ++s) {
+            for(std::size_t c = 0; c < classCount_; ++c) {
+                auto& edge = edgeRef(s, c);
                 if(!edge.enabled) {
                     continue;
                 }
@@ -936,18 +980,18 @@ private:
         }
 
         std::vector<std::vector<RegOp>> uniqueOps;
-        std::vector<std::vector<std::size_t>> edgeOpId(n, std::vector<std::size_t>(classCount_, 0));
-        std::vector<std::vector<unsigned char>> edgeEnabled(
-            n, std::vector<unsigned char>(classCount_, 0));
+        std::vector<std::size_t> edgeOpId(n * classCount_, 0);
         std::vector<std::size_t> finalOpId(n, 0);
+        const auto edgeOpOffset = [&](std::size_t state, std::size_t classId) -> std::size_t {
+            return state * classCount_ + classId;
+        };
 
         for(std::size_t s = 0; s < n; ++s) {
             for(std::size_t c = 0; c < classCount_; ++c) {
-                if(!delta_[s][c].enabled) {
+                if(!edgeRef(s, c).enabled) {
                     continue;
                 }
-                edgeEnabled[s][c] = 1;
-                edgeOpId[s][c] = internOps(delta_[s][c].ops, uniqueOps);
+                edgeOpId[edgeOpOffset(s, c)] = internOps(edgeRef(s, c).ops, uniqueOps);
             }
             if(states_[s].isFinal) {
                 finalOpId[s] = internOps(states_[s].finalOps, uniqueOps) + 1;
@@ -987,18 +1031,18 @@ private:
                 sig.push_back(finalOpId[s]);
 
                 for(std::size_t c = 0; c < classCount_; ++c) {
-                    if(!delta_[s][c].enabled) {
+                    if(!edgeRef(s, c).enabled) {
                         sig.push_back(0);
                         sig.push_back(0);
                         sig.push_back(0);
                         continue;
                     }
-                    const auto to = delta_[s][c].to;
+                    const auto to = edgeRef(s, c).to;
                     if(to >= n) {
                         return setError(TDFAError::invalid_tnfa);
                     }
                     sig.push_back(1);
-                    sig.push_back(edgeOpId[s][c] + 1);
+                    sig.push_back(edgeOpId[edgeOpOffset(s, c)] + 1);
                     sig.push_back(part[to] + 1);
                 }
 
@@ -1039,7 +1083,7 @@ private:
         }
 
         std::vector<DFAStateInner> newStates(groupN);
-        std::vector<std::vector<TempEdge>> newDelta(groupN, std::vector<TempEdge>(classCount_));
+        std::vector<TempEdge> newDelta(groupN * classCount_);
 
         for(std::size_t g = 0; g < groupN; ++g) {
             const auto rs = rep[g];
@@ -1051,16 +1095,17 @@ private:
             newStates[g].finalOps = states_[rs].finalOps;
 
             for(std::size_t c = 0; c < classCount_; ++c) {
-                if(!delta_[rs][c].enabled) {
+                if(!edgeRef(rs, c).enabled) {
                     continue;
                 }
-                const auto to = delta_[rs][c].to;
+                const auto to = edgeRef(rs, c).to;
                 if(to >= n) {
                     return setError(TDFAError::invalid_tnfa);
                 }
-                newDelta[g][c].enabled = true;
-                newDelta[g][c].to = static_cast<StateTy>(part[to]);
-                newDelta[g][c].ops = delta_[rs][c].ops;
+                auto& edge = newDelta[g * classCount_ + c];
+                edge.enabled = true;
+                edge.to = static_cast<StateTy>(part[to]);
+                edge.ops = edgeRef(rs, c).ops;
             }
         }
 
@@ -1069,7 +1114,10 @@ private:
         }
         startState_ = static_cast<StateTy>(part[startState_]);
         states_ = std::move(newStates);
-        delta_ = std::move(newDelta);
+        delta_.clear();
+        for(auto& edge: newDelta) {
+            pushDeltaEdge(std::move(edge));
+        }
         return true;
     }
 
@@ -1305,7 +1353,9 @@ private:
         const auto stateIdx = static_cast<StateTy>(states_.size());
         states_.push_back(std::move(candidate));
         peakStateCount_ = std::max(peakStateCount_, states_.size());
-        delta_.emplace_back(classCount_);
+        for(std::size_t c = 0; c < classCount_; ++c) {
+            pushDeltaEdge();
+        }
         updateStateRegStat(states_.back());
         return stateIdx;
     }
@@ -1380,10 +1430,14 @@ private:
 
     [[nodiscard]] constexpr auto findConfig(const DFAStateInner& state, StateTy q) const
         -> const Config3* {
-        for(const auto& cfg: state.configs) {
-            if(cfg.q == q) {
-                return &cfg;
-            }
+        const auto it = std::lower_bound(state.configs.begin(),
+                                         state.configs.end(),
+                                         q,
+                                         [](const Config3& cfg, StateTy target) {
+                                             return cfg.q < target;
+                                         });
+        if(it != state.configs.end() && it->q == q) {
+            return &*it;
         }
         return nullptr;
     }
@@ -1579,10 +1633,10 @@ private:
         std::size_t total = 0;
         for(std::size_t s = 0; s < states_.size(); ++s) {
             for(std::size_t c = 0; c < classCount_; ++c) {
-                if(!delta_[s][c].enabled) {
+                if(!edgeRef(s, c).enabled) {
                     continue;
                 }
-                total += delta_[s][c].ops.size();
+                total += edgeRef(s, c).ops.size();
             }
             if(states_[s].isFinal) {
                 total += states_[s].finalOps.size();
@@ -1870,20 +1924,21 @@ private:
             model.isFinal[s] = states_[s].isFinal;
 
             for(std::size_t c = 0; c < classCount_; ++c) {
-                if(!delta_[s][c].enabled) {
+                const auto& edge = edgeRef(s, c);
+                if(!edge.enabled) {
                     continue;
                 }
-                const auto slice = appendSlice(model, delta_[s][c].ops);
+                const auto slice = appendSlice(model, edge.ops);
                 if(buildError_ != TDFAError::none) {
                     return std::nullopt;
                 }
                 model.delta[s][c].enabled = true;
-                model.delta[s][c].to = delta_[s][c].to;
+                model.delta[s][c].to = edge.to;
                 model.delta[s][c].ops = slice;
 
                 const auto range = model.rangeToPair[c];
                 for(uint16_t code = range.first; code <= range.second; ++code) {
-                    model.byteDelta[s][code] = delta_[s][c].to;
+                    model.byteDelta[s][code] = edge.to;
                 }
             }
 
@@ -1939,7 +1994,9 @@ private:
 
     std::vector<RegisterId> finalRegOfTag_{};
     std::vector<DFAStateInner> states_{};
-    std::vector<std::vector<TempEdge>> delta_{};
+    DeltaResourceTy deltaResource_{};
+    DeltaPoolTy delta_;
+    std::size_t deltaPeak_ = 0;
 
     TDFACounting counting_{};
 };
@@ -1962,10 +2019,13 @@ template <typename TNFAModelTy,
 template <auto tnfaModel>
 [[nodiscard]] consteval auto fromTNFAAuto() {
     using TNFAModelTy = std::remove_cvref_t<decltype(tnfaModel)>;
-    constexpr auto counting = []() consteval {
+    constexpr auto meta = []() consteval {
         Builder<TNFAModelTy, true> builder(tnfaModel);
-        return builder.build();
+        const auto counting = builder.build();
+        return std::pair{counting, builder.genDeltaRecord()};
     }();
+    constexpr auto counting = meta.first;
+    constexpr auto deltaRecord = meta.second;
 
     constexpr auto tagNRaw = tnfaModel.tagSize();
     constexpr auto stateN =
@@ -1974,7 +2034,7 @@ template <auto tnfaModel>
     constexpr auto opN = counting.opN == 0 ? 1u : static_cast<unsigned>(counting.opN);
     constexpr auto tagN = tagNRaw == 0 ? 1u : static_cast<unsigned>(tagNRaw);
 
-    Builder<TNFAModelTy, false, regN, stateN, opN, tagN> builder(tnfaModel);
+    Builder<TNFAModelTy, false, regN, stateN, opN, tagN, deltaRecord> builder(tnfaModel);
     return builder.build();
 }
 
