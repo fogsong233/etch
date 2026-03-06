@@ -426,7 +426,8 @@ private:
         return edgeRef(ref.state, ref.classId).ops;
     }
 
-    [[nodiscard]] constexpr auto getOpsConst(const BlockRef& ref) const -> const std::vector<RegOp>& {
+    [[nodiscard]] constexpr auto getOpsConst(const BlockRef& ref) const
+        -> const std::vector<RegOp>& {
         if(ref.isFinal) {
             return states_[ref.state].finalOps;
         }
@@ -503,12 +504,13 @@ private:
         }
 
         std::vector<std::vector<std::size_t>> succ(out.blocks.size());
-        std::vector<std::vector<unsigned char>> use(
-            out.blocks.size(), std::vector<unsigned char>(regCount_ + 1, 0));
-        std::vector<std::vector<unsigned char>> def(
-            out.blocks.size(), std::vector<unsigned char>(regCount_ + 1, 0));
+        std::vector<std::vector<unsigned char>> use(out.blocks.size(),
+                                                    std::vector<unsigned char>(regCount_ + 1, 0));
+        std::vector<std::vector<unsigned char>> def(out.blocks.size(),
+                                                    std::vector<unsigned char>(regCount_ + 1, 0));
         std::vector<std::vector<unsigned char>> exitLive(
-            out.blocks.size(), std::vector<unsigned char>(regCount_ + 1, 0));
+            out.blocks.size(),
+            std::vector<unsigned char>(regCount_ + 1, 0));
 
         for(std::size_t b = 0; b < out.blocks.size(); ++b) {
             const auto& br = out.blocks[b];
@@ -630,7 +632,8 @@ private:
         }
 
         std::vector<std::vector<unsigned char>> interfere(
-            regCount_ + 1, std::vector<unsigned char>(regCount_ + 1, 0));
+            regCount_ + 1,
+            std::vector<unsigned char>(regCount_ + 1, 0));
         for(std::size_t r = 1; r <= regCount_; ++r) {
             interfere[r][r] = 1;
         }
@@ -967,9 +970,8 @@ private:
         return opPool.size() - 1;
     }
 
-    [[nodiscard]] constexpr auto sameSignature(
-        const std::vector<std::size_t>& lhs,
-        const std::vector<std::size_t>& rhs) const -> bool {
+    [[nodiscard]] constexpr auto sameSignature(const std::vector<std::size_t>& lhs,
+                                               const std::vector<std::size_t>& rhs) const -> bool {
         if(lhs.size() != rhs.size()) {
             return false;
         }
@@ -1438,12 +1440,11 @@ private:
 
     [[nodiscard]] constexpr auto findConfig(const DFAStateInner& state, StateTy q) const
         -> const Config3* {
-        const auto it = std::lower_bound(state.configs.begin(),
-                                         state.configs.end(),
-                                         q,
-                                         [](const Config3& cfg, StateTy target) {
-                                             return cfg.q < target;
-                                         });
+        const auto it =
+            std::lower_bound(state.configs.begin(),
+                             state.configs.end(),
+                             q,
+                             [](const Config3& cfg, StateTy target) { return cfg.q < target; });
         if(it != state.configs.end() && it->q == q) {
             return &*it;
         }
@@ -2021,7 +2022,8 @@ private:
     [[nodiscard]] constexpr auto appendSliceInterned(ModelTy& model,
                                                      const std::vector<RegOp>& ops,
                                                      std::vector<std::vector<RegOp>>& uniqueOps,
-                                                     std::vector<OpSlice>& uniqueSlices) -> OpSlice {
+                                                     std::vector<OpSlice>& uniqueSlices)
+        -> OpSlice {
         if(ops.empty()) {
             return OpSlice{0, 0};
         }
@@ -2147,9 +2149,9 @@ template <std::size_t MaxStates,
           std::size_t MaxRegs,
           std::size_t MaxOps,
           std::size_t MaxTags>
-[[nodiscard]] constexpr auto classByBytePlusOne(
-    const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
-    char ch) -> uint16_t {
+[[nodiscard]] constexpr auto
+    classByBytePlusOne(const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
+                       char ch) -> uint16_t {
     const auto code = static_cast<unsigned char>(ch);
     return model.classByBytePlusOne[code];
 }
@@ -2212,14 +2214,13 @@ template <std::size_t MaxStates,
           std::size_t MaxRegs,
           std::size_t MaxOps,
           std::size_t MaxTags>
-[[nodiscard]] constexpr auto lengthMightMatch(
-    const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
-    std::size_t inputLen) -> bool {
+[[nodiscard]] constexpr auto
+    lengthMightMatch(const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
+                     std::size_t inputLen) -> bool {
     if(inputLen < model.minInputLen) {
         return false;
     }
-    if(model.maxInputLen != std::numeric_limits<uint32_t>::max() &&
-       inputLen > model.maxInputLen) {
+    if(model.maxInputLen != std::numeric_limits<uint32_t>::max() && inputLen > model.maxInputLen) {
         return false;
     }
     return true;
@@ -2313,11 +2314,7 @@ public:
         }
         const auto finalBoundary = static_cast<int>(pos_ + 1);
 
-        if(!applyOps(model_,
-                     model_.finalOps[state_],
-                     registers_,
-                     finalBoundary,
-                     unsetValue_)) {
+        if(!applyOps(model_, model_.finalOps[state_], registers_, finalBoundary, unsetValue_)) {
             alive_ = false;
             return std::nullopt;
         }
@@ -2396,9 +2393,10 @@ template <std::size_t MaxStates,
           std::size_t MaxRegs,
           std::size_t MaxOps,
           std::size_t MaxTags>
-[[nodiscard]] auto isMatch(const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
-                           std::string_view input,
-                           int unsetValue = TNFA::offset_unset) -> bool {
+[[nodiscard]] auto
+    isMatch(const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
+            std::string_view input,
+            int unsetValue = TNFA::offset_unset) -> bool {
     if(model.stateIdx == 0 || model.startState >= model.stateIdx) {
         return false;
     }
