@@ -1927,6 +1927,7 @@ private:
         model.tagCount = clampToU16(tagCount_);
         std::vector<std::vector<RegOp>> uniqueOps;
         std::vector<OpSlice> uniqueSlices;
+        std::vector<std::uint64_t> uniqueHashes;
         for(std::size_t s = 0; s < states_.size(); ++s) {
             model.byteDelta[s].fill(ModelTy::deadState);
         }
@@ -1954,7 +1955,8 @@ private:
                 if(!edge.enabled) {
                     continue;
                 }
-                const auto slice = appendSliceInterned(model, edge.ops, uniqueOps, uniqueSlices);
+                const auto slice =
+                    appendSliceInterned(model, edge.ops, uniqueOps, uniqueSlices, uniqueHashes);
                 if(buildError_ != TDFAError::none) {
                     return std::nullopt;
                 }
@@ -1970,7 +1972,8 @@ private:
 
             if(states_[s].isFinal) {
                 const auto slice =
-                    appendSliceInterned(model, states_[s].finalOps, uniqueOps, uniqueSlices);
+                    appendSliceInterned(
+                        model, states_[s].finalOps, uniqueOps, uniqueSlices, uniqueHashes);
                 if(buildError_ != TDFAError::none) {
                     return std::nullopt;
                 }
@@ -2019,17 +2022,33 @@ private:
         return OpSlice{off, static_cast<uint16_t>(ops.size())};
     }
 
+    [[nodiscard]] constexpr auto hashOps(const std::vector<RegOp>& ops) const -> std::uint64_t {
+        // FNV-1a over op-kind/lhs/rhs triples.
+        std::uint64_t hash = 1469598103934665603ULL;
+        for(const auto& op: ops) {
+            hash ^= static_cast<std::uint64_t>(op.kind);
+            hash *= 1099511628211ULL;
+            hash ^= static_cast<std::uint64_t>(op.lhs);
+            hash *= 1099511628211ULL;
+            hash ^= static_cast<std::uint64_t>(op.rhs);
+            hash *= 1099511628211ULL;
+        }
+        return hash;
+    }
+
     [[nodiscard]] constexpr auto appendSliceInterned(ModelTy& model,
                                                      const std::vector<RegOp>& ops,
                                                      std::vector<std::vector<RegOp>>& uniqueOps,
-                                                     std::vector<OpSlice>& uniqueSlices)
+                                                     std::vector<OpSlice>& uniqueSlices,
+                                                     std::vector<std::uint64_t>& uniqueHashes)
         -> OpSlice {
         if(ops.empty()) {
             return OpSlice{0, 0};
         }
 
+        const auto opsHash = hashOps(ops);
         for(std::size_t i = 0; i < uniqueOps.size(); ++i) {
-            if(equalOps(ops, uniqueOps[i])) {
+            if(uniqueHashes[i] == opsHash && equalOps(ops, uniqueOps[i])) {
                 return uniqueSlices[i];
             }
         }
@@ -2040,6 +2059,7 @@ private:
         }
         uniqueOps.push_back(ops);
         uniqueSlices.push_back(slice);
+        uniqueHashes.push_back(opsHash);
         return slice;
     }
 
@@ -2177,6 +2197,28 @@ template <std::size_t MaxStates,
           std::size_t MaxOps,
           std::size_t MaxTags,
           typename RegisterStorage>
+constexpr void applyOpsUnchecked(const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
+                                 OpSlice slice,
+                                 RegisterStorage& registers,
+                                 int curPos,
+                                 int unsetValue) {
+    for(std::size_t i = 0; i < slice.len; ++i) {
+        const auto& op = model.opPool[slice.off + i];
+        switch(op.kind) {
+            case RegOpKind::SetNil: registers[op.lhs] = unsetValue; break;
+            case RegOpKind::SetCur: registers[op.lhs] = curPos; break;
+            case RegOpKind::Copy:
+            case RegOpKind::Append: registers[op.lhs] = registers[op.rhs]; break;
+        }
+    }
+}
+
+template <std::size_t MaxStates,
+          std::size_t MaxCharRanges,
+          std::size_t MaxRegs,
+          std::size_t MaxOps,
+          std::size_t MaxTags,
+          typename RegisterStorage>
 [[nodiscard]] constexpr auto
     applyOps(const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
              OpSlice slice,
@@ -2193,19 +2235,32 @@ template <std::size_t MaxStates,
         if(static_cast<std::size_t>(op.lhs) >= registers.size()) {
             return false;
         }
-
-        switch(op.kind) {
-            case RegOpKind::SetNil: registers[op.lhs] = unsetValue; break;
-            case RegOpKind::SetCur: registers[op.lhs] = curPos; break;
-            case RegOpKind::Copy:
-            case RegOpKind::Append:
-                if(static_cast<std::size_t>(op.rhs) >= registers.size()) {
-                    return false;
-                }
-                registers[op.lhs] = registers[op.rhs];
-                break;
+        if((op.kind == RegOpKind::Copy || op.kind == RegOpKind::Append) &&
+           static_cast<std::size_t>(op.rhs) >= registers.size()) {
+            return false;
         }
     }
+    applyOpsUnchecked(model, slice, registers, curPos, unsetValue);
+    return true;
+}
+
+template <std::size_t MaxStates,
+          std::size_t MaxCharRanges,
+          std::size_t MaxRegs,
+          std::size_t MaxOps,
+          std::size_t MaxTags,
+          typename RegisterStorage>
+[[nodiscard]] constexpr auto
+    applyOpsFast(const TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>& model,
+                 OpSlice slice,
+                 RegisterStorage& registers,
+                 int curPos,
+                 int unsetValue) -> bool {
+    if(static_cast<std::size_t>(slice.off) + static_cast<std::size_t>(slice.len) >
+       model.opPoolIdx) {
+        return false;
+    }
+    applyOpsUnchecked(model, slice, registers, curPos, unsetValue);
     return true;
 }
 
@@ -2239,7 +2294,6 @@ public:
         model_(model), unsetValue_(unsetValue) {}
 
     [[nodiscard]] auto reset() -> bool {
-        registers_.clear();
         pos_ = 0;
         alive_ = false;
         finalized_ = false;
@@ -2250,7 +2304,11 @@ public:
         }
 
         state_ = model_.startState;
-        registers_.assign(static_cast<std::size_t>(model_.regCount) + 1, unsetValue_);
+        const auto regSize = static_cast<std::size_t>(model_.regCount) + 1;
+        if(registers_.size() != regSize) {
+            registers_.resize(regSize);
+        }
+        std::fill(registers_.begin(), registers_.end(), unsetValue_);
         alive_ = true;
         return true;
     }
@@ -2259,41 +2317,29 @@ public:
         if(!alive_ || finalized_) {
             return false;
         }
-        if(state_ >= model_.stateIdx) {
+
+        const auto byte = static_cast<unsigned char>(ch);
+        const auto next = model_.byteDelta[state_][byte];
+        if(next == ModelTy::deadState) {
             alive_ = false;
             return false;
         }
 
-        if(model_.opPoolIdx == 0) {
-            const auto next = model_.byteDelta[state_][static_cast<unsigned char>(ch)];
-            if(next == ModelTy::deadState) {
+        if(model_.opPoolIdx != 0) {
+            const auto classIdPlusOne = model_.classByBytePlusOne[byte];
+            if(classIdPlusOne == 0) {
                 alive_ = false;
                 return false;
             }
-            state_ = next;
-            ++pos_;
-            return true;
+            const auto classId = static_cast<ClassId>(classIdPlusOne - 1);
+            const auto& edge = model_.delta[state_][classId];
+            if(!applyOpsFast(model_, edge.ops, registers_, static_cast<int>(pos_ + 1), unsetValue_)) {
+                alive_ = false;
+                return false;
+            }
         }
 
-        const auto classIdPlusOne = classByBytePlusOne(model_, ch);
-        if(classIdPlusOne == 0) {
-            alive_ = false;
-            return false;
-        }
-        const auto classId = static_cast<ClassId>(classIdPlusOne - 1);
-
-        const auto& edge = model_.delta[state_][classId];
-        if(!edge.enabled) {
-            alive_ = false;
-            return false;
-        }
-
-        if(!applyOps(model_, edge.ops, registers_, static_cast<int>(pos_ + 1), unsetValue_)) {
-            alive_ = false;
-            return false;
-        }
-
-        state_ = edge.to;
+        state_ = next;
         ++pos_;
         return true;
     }
@@ -2314,7 +2360,7 @@ public:
         }
         const auto finalBoundary = static_cast<int>(pos_ + 1);
 
-        if(!applyOps(model_, model_.finalOps[state_], registers_, finalBoundary, unsetValue_)) {
+        if(!applyOpsFast(model_, model_.finalOps[state_], registers_, finalBoundary, unsetValue_)) {
             alive_ = false;
             return std::nullopt;
         }
@@ -2407,12 +2453,8 @@ template <std::size_t MaxStates,
         if(input.size() != model.literalLen) {
             return false;
         }
-        for(std::size_t i = 0; i < input.size(); ++i) {
-            if(input[i] != model.literalBytes[i]) {
-                return false;
-            }
-        }
-        return true;
+        return std::char_traits<char>::compare(input.data(), model.literalBytes.data(), input.size()) ==
+               0;
     }
 
     StateTy state = model.startState;
@@ -2429,26 +2471,26 @@ template <std::size_t MaxStates,
     }
 
     std::array<int, MaxRegs + 1> registers{};
-    registers.fill(unsetValue);
+    const auto regSpan = static_cast<std::size_t>(model.regCount) + 1;
+    std::fill_n(registers.begin(), regSpan, unsetValue);
     std::size_t pos = 0;
 
     for(const auto ch: input) {
-        const auto classIdPlusOne = classByBytePlusOne(model, ch);
+        const auto byte = static_cast<unsigned char>(ch);
+        const auto next = model.byteDelta[state][byte];
+        if(next == TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>::deadState) {
+            return false;
+        }
+        const auto classIdPlusOne = model.classByBytePlusOne[byte];
         if(classIdPlusOne == 0) {
             return false;
         }
         const auto classId = static_cast<ClassId>(classIdPlusOne - 1);
         const auto& edge = model.delta[state][classId];
-        if(!edge.enabled) {
+        if(!applyOpsFast(model, edge.ops, registers, static_cast<int>(pos + 1), unsetValue)) {
             return false;
         }
-        if(!applyOps(model, edge.ops, registers, static_cast<int>(pos + 1), unsetValue)) {
-            return false;
-        }
-        state = edge.to;
-        if(state >= model.stateIdx) {
-            return false;
-        }
+        state = next;
         ++pos;
     }
 
@@ -2459,7 +2501,7 @@ template <std::size_t MaxStates,
         return false;
     }
     const auto finalBoundary = static_cast<int>(pos + 1);
-    return applyOps(model, model.finalOps[state], registers, finalBoundary, unsetValue);
+    return applyOpsFast(model, model.finalOps[state], registers, finalBoundary, unsetValue);
 }
 
 template <std::size_t MaxStates,
@@ -2488,27 +2530,27 @@ template <std::size_t MaxStates,
     }
 
     std::array<int, MaxRegs + 1> registers{};
-    registers.fill(unsetValue);
+    const auto regSpan = static_cast<std::size_t>(model.regCount) + 1;
+    std::fill_n(registers.begin(), regSpan, unsetValue);
 
     StateTy state = model.startState;
     std::size_t pos = 0;
     for(const auto ch: input) {
-        const auto classIdPlusOne = classByBytePlusOne(model, ch);
+        const auto byte = static_cast<unsigned char>(ch);
+        const auto next = model.byteDelta[state][byte];
+        if(next == TDFAModel<MaxStates, MaxCharRanges, MaxRegs, MaxOps, MaxTags>::deadState) {
+            return std::nullopt;
+        }
+        const auto classIdPlusOne = model.classByBytePlusOne[byte];
         if(classIdPlusOne == 0) {
             return std::nullopt;
         }
         const auto classId = static_cast<ClassId>(classIdPlusOne - 1);
         const auto& edge = model.delta[state][classId];
-        if(!edge.enabled) {
+        if(!applyOpsFast(model, edge.ops, registers, static_cast<int>(pos + 1), unsetValue)) {
             return std::nullopt;
         }
-        if(!applyOps(model, edge.ops, registers, static_cast<int>(pos + 1), unsetValue)) {
-            return std::nullopt;
-        }
-        state = edge.to;
-        if(state >= model.stateIdx) {
-            return std::nullopt;
-        }
+        state = next;
         ++pos;
     }
 
@@ -2519,7 +2561,7 @@ template <std::size_t MaxStates,
         return std::nullopt;
     }
     const auto finalBoundary = static_cast<int>(pos + 1);
-    if(!applyOps(model, model.finalOps[state], registers, finalBoundary, unsetValue)) {
+    if(!applyOpsFast(model, model.finalOps[state], registers, finalBoundary, unsetValue)) {
         return std::nullopt;
     }
 
