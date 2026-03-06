@@ -51,7 +51,7 @@ auto matchEtchTNFA(std::string_view input) -> bool {
 
 template <FixedString Pattern>
 auto matchEtchTDFA(std::string_view input) -> bool {
-    return TDFA::isMatch(kTDFA<Pattern>, input);
+    return TDFA::isMatchStatic<kTDFA<Pattern>>(input);
 }
 
 auto matchCtreLiteral(std::string_view input) -> bool {
@@ -280,6 +280,24 @@ int main(int argc, char** argv) {
                 &matchCtreLiteral,
                 &matchStdLiteral,
                 makeCorpus(corpusSize, 1, 12, 11, {"abc", "ab", "abcd", "zzzabc"})},
+        CaseDef{"iso_datetime_tz_long",
+                &matchEtchTNFA<
+                    etch::FixedString{
+                        R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>,
+                &matchEtchTDFA<
+                    etch::FixedString{
+                        R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>,
+                &matchCtreIsoDatetimeTzLong,
+                &matchStdIsoDatetimeTzLong,
+                makeCorpus(corpusSize,
+                           1,
+                           96,
+                           47,
+                           {"2024-12-31T23:59:59Z",
+                            "1999-01-01T00:00:00+08:00",
+                            "2030-06-15T12:30:45-05:30",
+                            "2024-12-31 23:59:59Z",
+                            "2024-12-31T23:59Z"})},
         CaseDef{"email_like",
                 &matchEtchTNFA<etch::FixedString{R"(\w+@\w+\.\w+)"}>,
                 &matchEtchTDFA<etch::FixedString{R"(\w+@\w+\.\w+)"}>,
@@ -312,24 +330,6 @@ int main(int argc, char** argv) {
                 &matchCtreImage,
                 &matchStdImage,
                 makeCorpus(corpusSize, 4, 24, 23, {"photo.jpg", "icon.png", "anim.gif", "photo.bmp"})},
-        CaseDef{"iso_datetime_tz_long",
-                &matchEtchTNFA<
-                    etch::FixedString{
-                        R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>,
-                &matchEtchTDFA<
-                    etch::FixedString{
-                        R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>,
-                &matchCtreIsoDatetimeTzLong,
-                &matchStdIsoDatetimeTzLong,
-                makeCorpus(corpusSize,
-                           12,
-                           40,
-                           47,
-                           {"2024-12-31T23:59:59Z",
-                            "1999-01-01T00:00:00+08:00",
-                            "2030-06-15T12:30:45-05:30",
-                            "2024-12-31 23:59:59Z",
-                            "2024-12-31T23:59Z"})},
     };
 
     printHeader(corpusSize, targetOps);

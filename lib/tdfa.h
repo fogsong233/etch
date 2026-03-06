@@ -2575,4 +2575,72 @@ template <std::size_t MaxStates,
     return out;
 }
 
+template <auto& model>
+[[nodiscard]] constexpr auto isMatchStatic(std::string_view input,
+                                           int unsetValue = TNFA::offset_unset) -> bool {
+    using ModelTy = std::remove_cvref_t<decltype(model)>;
+    if constexpr(model.stateIdx == 0) {
+        return false;
+    }
+    if constexpr(model.startState >= model.stateIdx) {
+        return false;
+    }
+
+    if(!lengthMightMatch(model, input.size())) {
+        return false;
+    }
+
+    if constexpr(model.isExactLiteral) {
+        if(input.size() != model.literalLen) {
+            return false;
+        }
+        return std::char_traits<char>::compare(input.data(), model.literalBytes.data(), input.size()) ==
+               0;
+    }
+
+    StateTy state = model.startState;
+
+    if constexpr(model.opPoolIdx == 0) {
+        for(const auto ch: input) {
+            const auto next = model.byteDelta[state][static_cast<unsigned char>(ch)];
+            if(next == ModelTy::deadState) {
+                return false;
+            }
+            state = next;
+        }
+        return model.isFinal[state];
+    } else {
+        std::vector<int> registers(static_cast<std::size_t>(model.regCount) + 1, unsetValue);
+        std::size_t pos = 0;
+
+        for(const auto ch: input) {
+            const auto byte = static_cast<unsigned char>(ch);
+            const auto next = model.byteDelta[state][byte];
+            if(next == ModelTy::deadState) {
+                return false;
+            }
+            const auto classIdPlusOne = model.classByBytePlusOne[byte];
+            if(classIdPlusOne == 0) {
+                return false;
+            }
+            const auto classId = static_cast<ClassId>(classIdPlusOne - 1);
+            const auto& edge = model.delta[state][classId];
+            if(!applyOpsFast(model, edge.ops, registers, static_cast<int>(pos + 1), unsetValue)) {
+                return false;
+            }
+            state = next;
+            ++pos;
+        }
+
+        if(!model.isFinal[state]) {
+            return false;
+        }
+        if(pos >= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+            return false;
+        }
+        const auto finalBoundary = static_cast<int>(pos + 1);
+        return applyOpsFast(model, model.finalOps[state], registers, finalBoundary, unsetValue);
+    }
+}
+
 }  // namespace etch::TDFA

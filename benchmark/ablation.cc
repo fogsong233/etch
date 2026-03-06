@@ -64,22 +64,22 @@ auto matchTNFA(std::string_view input) -> bool {
 
 template <FixedString Pattern>
 auto matchTDFAFull(std::string_view input) -> bool {
-    return TDFA::isMatch(kTDFA<Pattern, true, true, true, true>, input);
+    return TDFA::isMatchStatic<kTDFA<Pattern, true, true, true, true>>(input);
 }
 
 template <FixedString Pattern>
 auto matchTDFANoRegOptimize(std::string_view input) -> bool {
-    return TDFA::isMatch(kTDFA<Pattern, false, true, true, true>, input);
+    return TDFA::isMatchStatic<kTDFA<Pattern, false, true, true, true>>(input);
 }
 
 template <FixedString Pattern>
 auto matchTDFANoStateMinimize(std::string_view input) -> bool {
-    return TDFA::isMatch(kTDFA<Pattern, true, false, true, true>, input);
+    return TDFA::isMatchStatic<kTDFA<Pattern, true, false, true, true>>(input);
 }
 
 template <FixedString Pattern>
 auto matchTDFANoFastpath(std::string_view input) -> bool {
-    return TDFA::isMatch(kTDFA<Pattern, true, true, false, false>, input);
+    return TDFA::isMatchStatic<kTDFA<Pattern, true, true, false, false>>(input);
 }
 
 auto makeRandomCorpus(std::size_t count, std::size_t minLen, std::size_t maxLen, uint32_t seed)
@@ -306,6 +306,33 @@ int main(int argc, char** argv) {
                     EngineDef{"etch_tnfa", &matchTNFA<etch::FixedString{"abc"}>},
                 },
                 makeCorpus(corpusSize, 1, 12, 11, {"abc", "ab", "abcd", "zzzabc"})},
+        CaseDef{"iso_datetime_tz_long",
+                {
+                    EngineDef{"etch_tdfa_full",
+                              &matchTDFAFull<etch::FixedString{
+                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
+                    EngineDef{"etch_tdfa_no_regopt",
+                              &matchTDFANoRegOptimize<etch::FixedString{
+                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
+                    EngineDef{"etch_tdfa_no_state_min",
+                              &matchTDFANoStateMinimize<etch::FixedString{
+                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
+                    EngineDef{"etch_tdfa_no_fastpath",
+                              &matchTDFANoFastpath<etch::FixedString{
+                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
+                    EngineDef{"etch_tnfa",
+                              &matchTNFA<etch::FixedString{
+                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
+                },
+                makeCorpus(corpusSize,
+                           1,
+                           96,
+                           47,
+                           {"2024-12-31T23:59:59Z",
+                            "1999-01-01T00:00:00+08:00",
+                            "2030-06-15T12:30:45-05:30",
+                            "2024-12-31 23:59:59Z",
+                            "2024-12-31T23:59Z"})},
         CaseDef{"email_like",
                 {
                     EngineDef{"etch_tdfa_full",
@@ -366,33 +393,6 @@ int main(int argc, char** argv) {
                     EngineDef{"etch_tnfa", &matchTNFA<etch::FixedString{R"(\w+\.(jpg|png|gif))"}>},
                 },
                 makeCorpus(corpusSize, 4, 24, 23, {"photo.jpg", "icon.png", "anim.gif", "photo.bmp"})},
-        CaseDef{"iso_datetime_tz_long",
-                {
-                    EngineDef{"etch_tdfa_full",
-                              &matchTDFAFull<etch::FixedString{
-                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
-                    EngineDef{"etch_tdfa_no_regopt",
-                              &matchTDFANoRegOptimize<etch::FixedString{
-                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
-                    EngineDef{"etch_tdfa_no_state_min",
-                              &matchTDFANoStateMinimize<etch::FixedString{
-                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
-                    EngineDef{"etch_tdfa_no_fastpath",
-                              &matchTDFANoFastpath<etch::FixedString{
-                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
-                    EngineDef{"etch_tnfa",
-                              &matchTNFA<etch::FixedString{
-                                  R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>},
-                },
-                makeCorpus(corpusSize,
-                           12,
-                           40,
-                           47,
-                           {"2024-12-31T23:59:59Z",
-                            "1999-01-01T00:00:00+08:00",
-                            "2030-06-15T12:30:45-05:30",
-                            "2024-12-31 23:59:59Z",
-                            "2024-12-31T23:59Z"})},
         CaseDef{"tag_plus",
                 {
                     EngineDef{"etch_tdfa_full",
@@ -440,14 +440,14 @@ int main(int argc, char** argv) {
 
     printModelStatsHeader();
     printPatternModelStats<etch::FixedString{"abc"}>("literal_abc");
-    printPatternModelStats<etch::FixedString{R"(\w+@\w+\.\w+)"}>("email_like");
-    printPatternModelStats<etch::FixedString{R"(\d{4}-\d{2}-\d{2})"}>("iso_date");
-    printPatternModelStats<etch::FixedString{R"(\w+/\w+(\.\w+)?)"}>("path_opt_ext");
-    printPatternModelStats<etch::FixedString{R"(\w+\.(jpg|png|gif))"}>("image_ext");
     printPatternModelStats<
         etch::FixedString{
             R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|(\+\d{2}:\d{2}|-\d{2}:\d{2})))"}>(
         "iso_datetime_tz_long");
+    printPatternModelStats<etch::FixedString{R"(\w+@\w+\.\w+)"}>("email_like");
+    printPatternModelStats<etch::FixedString{R"(\d{4}-\d{2}-\d{2})"}>("iso_date");
+    printPatternModelStats<etch::FixedString{R"(\w+/\w+(\.\w+)?)"}>("path_opt_ext");
+    printPatternModelStats<etch::FixedString{R"(\w+\.(jpg|png|gif))"}>("image_ext");
     printPatternModelStats<etch::FixedString{R"((\g{0}a)+)"}>("tag_plus");
     printPatternModelStats<etch::FixedString{R"(\g{0}ab|a)"}>("tag_alt_reset");
     printPatternModelStats<etch::FixedString{R"((\g{0}ab){2,3})"}>("tag_repeat_range");
